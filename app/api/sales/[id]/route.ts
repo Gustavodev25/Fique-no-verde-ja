@@ -1,0 +1,181 @@
+import { NextRequest, NextResponse } from "next/server";
+import jwt from "jsonwebtoken";
+import { query } from "@/lib/db";
+
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this";
+
+type DecodedToken = {
+  userId: string;
+};
+
+type AuthenticatedUser = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  is_admin: boolean;
+};
+
+const getTokenFromRequest = (request: NextRequest) => {
+  const cookieToken = request.cookies.get("token")?.value;
+  if (cookieToken) {
+    return cookieToken;
+  }
+  const authHeader = request.headers.get("authorization");
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.split(" ")[1];
+  }
+  return null;
+};
+
+const authenticateUser = async (request: NextRequest): Promise<AuthenticatedUser> => {
+  const token = getTokenFromRequest(request);
+  if (!token) {
+    throw new Error("Token de autenticacao nao informado");
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as DecodedToken;
+
+    const result = await query(
+      `SELECT id, first_name, last_name, email, is_admin
+       FROM users
+       WHERE id = $1`,
+      [decoded.userId]
+    );
+
+    const user = result.rows[0];
+    if (!user) {
+      throw new Error("Usuario nao encontrado");
+    }
+
+    return user;
+  } catch (error) {
+    console.error("Falha na autenticacao:", error);
+    throw new Error("Falha na autenticacao");
+  }
+};
+
+// GET - Obter detalhes de uma venda específica com seus itens
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const user = await authenticateUser(request);
+    const saleId = params.id;
+
+    // Buscar venda
+    const saleResult = await query(
+      `SELECT
+        s.id,
+        s.client_id,
+        s.attendant_id,
+        s.sale_date,
+        s.observations,
+        s.status,
+        s.payment_method,
+        s.general_discount_type,
+        s.general_discount_value,
+        s.subtotal,
+        s.total_discount,
+        s.total,
+        s.confirmed_at,
+        s.cancelled_at,
+        s.created_at,
+        s.updated_at,
+        c.name as client_name,
+        c.phone as client_phone,
+        c.email as client_email,
+        u.first_name || ' ' || u.last_name as attendant_name
+       FROM sales s
+       JOIN clients c ON s.client_id = c.id
+       JOIN users u ON s.attendant_id = u.id
+       WHERE s.id = $1`,
+      [saleId]
+    );
+
+    if (saleResult.rowCount === 0) {
+      return NextResponse.json(
+        { error: "Venda nao encontrada" },
+        { status: 404 }
+      );
+    }
+
+    const sale = saleResult.rows[0];
+
+    // Verificar permissões
+    if (!user.is_admin && sale.attendant_id !== user.id) {
+      return NextResponse.json(
+        { error: "Voce nao tem permissao para visualizar esta venda" },
+        { status: 403 }
+      );
+    }
+
+    // Buscar itens da venda
+    const itemsResult = await query(
+      `SELECT
+        id,
+        product_id,
+        product_name,
+        quantity,
+        unit_price,
+        discount_type,
+        discount_value,
+        subtotal,
+        discount_amount,
+        total,
+        created_at
+       FROM sale_items
+       WHERE sale_id = $1
+       ORDER BY created_at ASC`,
+      [saleId]
+    );
+
+    // Formatar resposta
+    const formattedSale = {
+      id: sale.id,
+      clientId: sale.client_id,
+      clientName: sale.client_name,
+      clientPhone: sale.client_phone,
+      clientEmail: sale.client_email,
+      attendantId: sale.attendant_id,
+      attendantName: sale.attendant_name,
+      saleDate: sale.sale_date,
+      observations: sale.observations,
+      status: sale.status,
+      paymentMethod: sale.payment_method,
+      generalDiscountType: sale.general_discount_type,
+      generalDiscountValue: sale.general_discount_value,
+      subtotal: parseFloat(sale.subtotal),
+      totalDiscount: parseFloat(sale.total_discount),
+      total: parseFloat(sale.total),
+      confirmedAt: sale.confirmed_at,
+      cancelledAt: sale.cancelled_at,
+      createdAt: sale.created_at,
+      updatedAt: sale.updated_at,
+      items: itemsResult.rows.map((item) => ({
+        id: item.id,
+        productId: item.product_id,
+        productName: item.product_name,
+        quantity: item.quantity,
+        unitPrice: parseFloat(item.unit_price),
+        discountType: item.discount_type,
+        discountValue: parseFloat(item.discount_value || 0),
+        subtotal: parseFloat(item.subtotal),
+        discountAmount: parseFloat(item.discount_amount),
+        total: parseFloat(item.total),
+        createdAt: item.created_at,
+      })),
+    };
+
+    return NextResponse.json({ sale: formattedSale }, { status: 200 });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Nao foi possivel carregar os detalhes da venda";
+    const status = message.includes("autenticacao") ? 401 : 500;
+    return NextResponse.json({ error: message }, { status });
+  }
+}

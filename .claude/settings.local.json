@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(dir:*)",
+      "Bash(cd:*)",
+      "Bash(npm run dev:*)",
+      "Bash(find:*)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(findstr:*)",
+      "Bash(nul)",
+      "Bash(psql:*)",
+      "Bash(node -e:*)",
+      "Bash(sc query:*)",
+      "Bash(where:*)",
+      "Bash(choco --version:*)",
+      "Bash(ping:*)",
+      "Bash(nslookup:*)",
+      "Bash(set NODE_OPTIONS=--dns-result-order=ipv4first)",
+      "Bash(taskkill:*)",
+      "Bash(timeout /t 3 /nobreak)",
+      "Bash(ipconfig:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
