@@ -28,6 +28,7 @@ interface SignupData {
   email: string;
   phone: string;
   password: string;
+  inviteCode?: string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);

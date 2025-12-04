@@ -90,7 +90,6 @@ export async function GET(request: NextRequest) {
         cp.total_paid,
         cp.expires_at,
         cp.created_at,
-        -- Verificar se está expirado
         CASE
           WHEN cp.expires_at IS NOT NULL AND cp.expires_at < CURRENT_DATE THEN true
           ELSE false
@@ -127,7 +126,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       {
-        packages: result.rows.map((row) => ({
+        packages: result.rows.map((row: any) => ({
           id: row.id,
           clientId: row.client_id,
           clientName: row.client_name,

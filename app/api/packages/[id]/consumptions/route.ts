@@ -63,9 +63,10 @@ const authenticateUser = async (request: NextRequest): Promise<AuthenticatedUser
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  props: { params: Promise<{ id: string }> }
 ) {
   try {
+    const params = await props.params;
     // Autenticar usuário
     const user = await authenticateUser(request);
 
@@ -96,7 +97,7 @@ export async function GET(
 
     return NextResponse.json(
       {
-        consumptions: result.rows.map((row) => ({
+        consumptions: result.rows.map((row: any) => ({
           id: row.id,
           packageId: row.package_id,
           saleId: row.sale_id,

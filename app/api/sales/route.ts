@@ -59,44 +59,92 @@ const authenticateUser = async (request: NextRequest): Promise<AuthenticatedUser
 // GET - Listar vendas
 export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const attendantId = searchParams.get("attendantId");
     const user = await authenticateUser(request);
+    // Escopo: atendente vÃª apenas suas vendas; admin vÃª todas ou filtra por atendente se fornecido
+    let whereClause = "";
+    const queryParams: any[] = [];
+    if (user.is_admin && attendantId) {
+      whereClause = "WHERE s.attendant_id = $1";
+      queryParams.push(attendantId);
+    } else if (!user.is_admin) {
+      whereClause = "WHERE s.attendant_id = $1";
+      queryParams.push(user.id);
+    }
 
-    // Se o usuário é admin, mostra todas as vendas
-    // Caso contrário, mostra apenas as vendas do próprio atendente
-    const whereClause = user.is_admin ? "" : "WHERE s.attendant_id = $1";
-    const queryParams = user.is_admin ? [] : [user.id];
-
-    const sales = await query(
-      `SELECT
-        s.id,
-        s.client_id,
-        s.attendant_id,
-        s.sale_date,
-        s.observations,
-        s.status,
-        s.payment_method,
-        s.general_discount_type,
-        s.general_discount_value,
-        s.subtotal,
-        s.total_discount,
-        s.total,
-        s.confirmed_at,
-        s.cancelled_at,
-        s.created_at,
-        s.updated_at,
-        c.name as client_name,
-        u.first_name || ' ' || u.last_name as attendant_name
-       FROM sales s
-       JOIN clients c ON s.client_id = c.id
-       JOIN users u ON s.attendant_id = u.id
-       ${whereClause}
-       ORDER BY s.sale_date DESC`,
-      queryParams
-    );
+    let hasRefundSupport = true;
+    let sales;
+    try {
+      sales = await query(
+        `SELECT
+          s.id,
+          s.client_id,
+          s.attendant_id,
+          s.sale_date,
+          s.observations,
+          s.status,
+          s.payment_method,
+          s.general_discount_type,
+          s.general_discount_value,
+          s.subtotal,
+          s.total_discount,
+          s.total,
+          s.refund_total,
+          s.confirmed_at,
+          s.cancelled_at,
+          s.created_at,
+          s.updated_at,
+          s.commission_amount,
+          c.name as client_name,
+          u.first_name || ' ' || u.last_name as attendant_name
+         FROM sales s
+         JOIN clients c ON s.client_id = c.id
+         JOIN users u ON s.attendant_id = u.id
+         ${whereClause}
+         ORDER BY s.sale_date DESC`,
+        queryParams
+      );
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg.includes("refund_total") || msg.includes("sale_refunds")) {
+        hasRefundSupport = false;
+        sales = await query(
+          `SELECT
+            s.id,
+            s.client_id,
+            s.attendant_id,
+            s.sale_date,
+            s.observations,
+            s.status,
+            s.payment_method,
+            s.general_discount_type,
+            s.general_discount_value,
+            s.subtotal,
+            s.total_discount,
+            s.total,
+            s.confirmed_at,
+            s.cancelled_at,
+            s.created_at,
+            s.updated_at,
+            s.commission_amount,
+            c.name as client_name,
+            u.first_name || ' ' || u.last_name as attendant_name
+           FROM sales s
+           JOIN clients c ON s.client_id = c.id
+           JOIN users u ON s.attendant_id = u.id
+           ${whereClause}
+           ORDER BY s.sale_date DESC`,
+          queryParams
+        );
+      } else {
+        throw err;
+      }
+    }
 
     // Buscar os itens de cada venda
     const formattedSales = await Promise.all(
-      sales.rows.map(async (sale) => {
+      sales.rows.map(async (sale: any) => {
         const items = await query(
           `SELECT
             id,
@@ -115,6 +163,33 @@ export async function GET(request: NextRequest) {
           [sale.id]
         );
 
+        let refunds: any[] = [];
+        if (hasRefundSupport) {
+          try {
+            const refundsResult = await query(
+              `SELECT
+                id,
+                amount,
+                reason,
+                created_by,
+                created_at
+               FROM sale_refunds
+               WHERE sale_id = $1
+               ORDER BY created_at DESC`,
+              [sale.id]
+            );
+            refunds = refundsResult.rows;
+          } catch (err: any) {
+            const msg = err?.message || "";
+            if (msg.includes("sale_refunds")) {
+              hasRefundSupport = false;
+              refunds = [];
+            } else {
+              throw err;
+            }
+          }
+        }
+
         return {
           id: sale.id,
           clientId: sale.client_id,
@@ -130,11 +205,13 @@ export async function GET(request: NextRequest) {
           subtotal: parseFloat(sale.subtotal),
           totalDiscount: parseFloat(sale.total_discount),
           total: parseFloat(sale.total),
+          refundTotal: hasRefundSupport ? parseFloat(sale.refund_total || 0) : 0,
+          commissionAmount: parseFloat(sale.commission_amount || 0),
           confirmedAt: sale.confirmed_at,
           cancelledAt: sale.cancelled_at,
           createdAt: sale.created_at,
           updatedAt: sale.updated_at,
-          items: items.rows.map((item) => ({
+          items: items.rows.map((item: any) => ({
             id: item.id,
             productId: item.product_id,
             productName: item.product_name,
@@ -146,6 +223,15 @@ export async function GET(request: NextRequest) {
             discountAmount: parseFloat(item.discount_amount),
             total: parseFloat(item.total),
           })),
+          refunds: hasRefundSupport
+            ? refunds.map((ref: any) => ({
+                id: ref.id,
+                amount: parseFloat(ref.amount),
+                reason: ref.reason,
+                createdBy: ref.created_by,
+                createdAt: ref.created_at,
+              }))
+            : [],
         };
       })
     );
@@ -176,12 +262,29 @@ export async function POST(request: NextRequest) {
       saleType, // "01", "02", ou "03"
       serviceId, // Usado para tipo "02" (Venda de Pacote)
       packageId, // Usado para tipo "03" (Consumo de Pacote)
+      carrierId, // Transportadora (dona do pacote) para tipo "02" e "03"
     } = body;
 
-    // Validações
-    if (!clientId) {
+    const normalizedSaleType: "01" | "02" | "03" = saleType || "01";
+
+    // ValidaÃ§Ãµes
+    if (normalizedSaleType === "01" && !clientId) {
       return NextResponse.json(
         { error: "Cliente e obrigatorio" },
+        { status: 400 }
+      );
+    }
+
+    if ((normalizedSaleType === "02" || normalizedSaleType === "03") && !carrierId) {
+      return NextResponse.json(
+        { error: "Transportadora e obrigatoria para venda/consumo de pacote" },
+        { status: 400 }
+      );
+    }
+
+    if (normalizedSaleType === "03" && !clientId) {
+      return NextResponse.json(
+        { error: "Cliente final e obrigatorio para consumo de pacote" },
         { status: 400 }
       );
     }
@@ -200,15 +303,66 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validação específica para consumo de pacote
-    if (saleType === "03" && !packageId) {
+    // ValidaÃ§Ã£o especÃ­fica para consumo de pacote
+    if (normalizedSaleType === "03" && !packageId) {
       return NextResponse.json(
         { error: "Package ID obrigatorio para consumo de pacote" },
         { status: 400 }
       );
     }
 
-    // Iniciar transação
+    const saleClientId =
+      normalizedSaleType === "02"
+        ? carrierId
+        : normalizedSaleType === "03"
+          ? clientId
+          : clientId;
+
+    // Conferir tipo do cliente para evitar uso indevido
+    const clientTypeResult = await query(
+      "SELECT client_type FROM clients WHERE id = $1",
+      [saleClientId]
+    );
+
+    if (clientTypeResult.rowCount === 0) {
+      return NextResponse.json(
+        { error: "Cliente nao encontrado" },
+        { status: 404 }
+      );
+    }
+
+    const clientType = clientTypeResult.rows[0].client_type || "common";
+
+    if (normalizedSaleType === "01" && clientType === "package") {
+      return NextResponse.json(
+        { error: "Clientes de pacote nao podem realizar venda comum" },
+        { status: 400 }
+      );
+    }
+
+    if (normalizedSaleType === "02" || normalizedSaleType === "03") {
+      const carrierTypeResult = await query(
+        "SELECT client_type FROM clients WHERE id = $1",
+        [carrierId]
+      );
+
+      if (carrierTypeResult.rowCount === 0) {
+        return NextResponse.json(
+          { error: "Transportadora nao encontrada" },
+          { status: 404 }
+        );
+      }
+
+      const carrierType = carrierTypeResult.rows[0].client_type || "common";
+      if (carrierType !== "package") {
+        return NextResponse.json(
+          { error: "Apenas clientes de pacote (transportadora) podem comprar ou consumir pacotes" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Iniciar transaÃ§Ã£o
     await query("BEGIN");
 
     try {
@@ -222,11 +376,12 @@ export async function POST(request: NextRequest) {
           payment_method,
           general_discount_type,
           general_discount_value,
-          status
-        ) VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4, $5, $6, 'aberta')
+          status,
+          confirmed_at
+        ) VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4, $5, $6, 'confirmada', CURRENT_TIMESTAMP)
         RETURNING id, sale_date`,
         [
-          clientId,
+          saleClientId,
           user.id,
           observations || null,
           paymentMethod,
@@ -253,16 +408,18 @@ export async function POST(request: NextRequest) {
           discountValue,
         } = item;
 
+        const normalizedProductId = productId || null;
+
         console.log("DEBUG BACKEND - Item recebido:", {
-          saleType,
+          saleType: normalizedSaleType,
           productName,
           quantity,
           unitPrice,
           calculatedSubtotal,
         });
 
-        // Usar calculatedSubtotal se disponível (para serviços com cálculo progressivo)
-        // Caso contrário, calcular normalmente
+        // Usar calculatedSubtotal se disponÃ­vel (para serviÃ§os com cÃ¡lculo progressivo)
+        // Caso contrÃ¡rio, calcular normalmente
         const subtotal = calculatedSubtotal !== undefined && calculatedSubtotal !== null
           ? Number(calculatedSubtotal)
           : quantity * unitPrice;
@@ -294,7 +451,7 @@ export async function POST(request: NextRequest) {
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [
             saleId,
-            productId,
+            normalizedProductId,
             productName,
             quantity,
             unitPrice,
@@ -319,20 +476,73 @@ export async function POST(request: NextRequest) {
       }
 
       const finalTotal = totalSubtotal - totalDiscountAmount - generalDiscountAmount;
+      const totalDiscountGiven = totalDiscountAmount + generalDiscountAmount;
+      const netAmount = finalTotal; // Valor lÃ­quido (apÃ³s descontos)
 
-      // Atualizar totais da venda
+      // ============================================
+      // CÃLCULO DE COMISSÃƒO
+      // ============================================
+      let commissionAmount = 0;
+      let commissionPolicyId = null;
+      const defaultCommissionRate = 5; // % fallback quando nenhuma politica for encontrada
+
+      // Buscar polÃ­tica de comissÃ£o aplicÃ¡vel
+      const firstItem = items[0];
+      const firstItemProductId = firstItem?.productId || null;
+      const policyResult = await query(
+        `SELECT get_applicable_commission_policy($1, $2, $3::DATE) as policy_id`,
+        [user.id, firstItemProductId, saleDate]
+      );
+
+      if (policyResult.rows.length > 0 && policyResult.rows[0].policy_id) {
+        commissionPolicyId = policyResult.rows[0].policy_id;
+
+        // Calcular comissao
+        const commissionResult = await query(
+          `SELECT calculate_commission($1, $2, $3) as commission`,
+          [saleId, netAmount, commissionPolicyId]
+        );
+
+        if (commissionResult.rows.length > 0) {
+          commissionAmount = parseFloat(commissionResult.rows[0].commission || 0);
+        }
+      } else {
+        // Fallback: aplica taxa padrao sobre o valor liquido quando nao ha politica
+        commissionAmount = parseFloat(((netAmount * defaultCommissionRate) / 100).toFixed(2));
+      }
+
+      console.log("DEBUG - ComissÃ£o calculada:", {
+        netAmount,
+        commissionPolicyId,
+        commissionAmount,
+      });
+
+      // Atualizar totais da venda (incluindo comissÃ£o e desconto)
       await query(
         `UPDATE sales
-         SET subtotal = $1, total_discount = $2, total = $3
-         WHERE id = $4`,
-        [totalSubtotal, totalDiscountAmount + generalDiscountAmount, finalTotal, saleId]
+         SET subtotal = $1,
+             total_discount = $2,
+             total = $3,
+             discount_amount = $4,
+             commission_amount = $5,
+             commission_policy_id = $6
+         WHERE id = $7`,
+        [
+          totalSubtotal,
+          totalDiscountGiven,
+          finalTotal,
+          totalDiscountGiven,
+          commissionAmount,
+          commissionPolicyId,
+          saleId
+        ]
       );
 
       // ============================================
-      // LÓGICA ESPECÍFICA POR TIPO DE VENDA
+      // LÃ“GICA ESPECÃFICA POR TIPO DE VENDA
       // ============================================
 
-      if (saleType === "02" && serviceId) {
+      if (normalizedSaleType === "02" && serviceId) {
         // Tipo 02 - VENDA DE PACOTE: Criar pacote para o cliente
         const firstItem = items[0];
         const totalQuantity = firstItem.quantity;
@@ -351,16 +561,34 @@ export async function POST(request: NextRequest) {
             total_paid,
             is_active
           ) VALUES ($1, $2, $3, $4, 0, $4, $5, $6, true)`,
-          [clientId, serviceId, saleId, totalQuantity, unitPricePackage, totalPaid]
+          [carrierId, serviceId, saleId, totalQuantity, unitPricePackage, totalPaid]
         );
 
-        console.log(`Pacote criado: ${totalQuantity} créditos para cliente ${clientId}`);
-      } else if (saleType === "03" && packageId) {
+        console.log(`Pacote criado: ${totalQuantity} creditos para cliente ${carrierId}`);
+      } else if (normalizedSaleType === "03" && packageId) {
         // Tipo 03 - CONSUMO DE PACOTE: Consumir do pacote existente
         const firstItem = items[0];
         const quantityToConsume = firstItem.quantity;
 
-        // Usar a função consume_package para garantir atomicidade
+        const packageCheck = await query(
+          `SELECT client_id, available_quantity FROM client_packages WHERE id = $1`,
+          [packageId]
+        );
+
+        if (packageCheck.rowCount === 0) {
+          throw new Error("Pacote nao encontrado");
+        }
+
+        const pkgRow = packageCheck.rows[0];
+        if (carrierId && pkgRow.client_id !== carrierId) {
+          throw new Error("Pacote nao pertence Ã  transportadora selecionada");
+        }
+
+        if (pkgRow.available_quantity < quantityToConsume) {
+          throw new Error("Saldo insuficiente no pacote selecionado");
+        }
+
+        // Usar a funÃ§Ã£o consume_package para garantir atomicidade
         try {
           await query("SELECT consume_package($1, $2, $3)", [
             packageId,
@@ -374,7 +602,7 @@ export async function POST(request: NextRequest) {
         } catch (pkgError: any) {
           // Se falhar, reverter tudo
           throw new Error(
-            `Erro ao consumir pacote: ${pkgError.message || "Saldo insuficiente ou pacote inválido"}`
+            `Erro ao consumir pacote: ${pkgError.message || "Saldo insuficiente ou pacote invÃ¡lido"}`
           );
         }
       }
@@ -386,9 +614,10 @@ export async function POST(request: NextRequest) {
           sale: {
             id: saleId,
             saleDate,
-            status: "aberta",
+            status: "confirmada",
             total: finalTotal,
-            saleType,
+            refundTotal: 0,
+            saleType: normalizedSaleType,
           },
           message: "Venda criada com sucesso",
         },
@@ -428,7 +657,7 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Verificar se a venda existe e está aberta
+    // Verificar se a venda existe e estÃ¡ aberta
     const saleCheck = await query(
       `SELECT id, attendant_id, status FROM sales WHERE id = $1`,
       [id]
@@ -450,7 +679,7 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Verificar permissões: apenas o próprio atendente ou admin pode editar
+    // Verificar permissÃµes: apenas o prÃ³prio atendente ou admin pode editar
     if (!user.is_admin && sale.attendant_id !== user.id) {
       return NextResponse.json(
         { error: "Voce nao tem permissao para editar esta venda" },
@@ -498,8 +727,8 @@ export async function PUT(request: NextRequest) {
           discountValue,
         } = item;
 
-        // Usar calculatedSubtotal se disponível (para serviços com cálculo progressivo)
-        // Caso contrário, calcular normalmente
+        // Usar calculatedSubtotal se disponÃ­vel (para serviÃ§os com cÃ¡lculo progressivo)
+        // Caso contrÃ¡rio, calcular normalmente
         const subtotal = calculatedSubtotal !== undefined && calculatedSubtotal !== null
           ? Number(calculatedSubtotal)
           : quantity * unitPrice;
@@ -583,3 +812,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: message }, { status });
   }
 }
+
+
+
+

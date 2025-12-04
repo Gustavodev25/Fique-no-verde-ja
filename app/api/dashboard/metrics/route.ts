@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { query } from "@/lib/db";
+import { supabaseAdmin, query } from "@/lib/db";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this";
 
@@ -55,15 +55,13 @@ const authenticateUser = async (request: NextRequest): Promise<AuthenticatedUser
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as DecodedToken;
-    const result = await query(
-      `SELECT id, first_name, last_name, email, is_admin
-       FROM users
-       WHERE id = $1`,
-      [decoded.userId],
-    );
+    const { data: user, error } = await supabaseAdmin
+      .from("users")
+      .select("id, first_name, last_name, email, is_admin")
+      .eq("id", decoded.userId)
+      .single();
 
-    const user = result.rows[0];
-    if (!user) {
+    if (error || !user) {
       throw new Error("Usuario nao encontrado");
     }
 
@@ -82,12 +80,14 @@ type FilterOptions = {
   serviceAlias?: string;
   applyUserFilter?: boolean;
   paramOffset?: number;
+  adminAttendantId?: string | null;
 };
 
 export async function GET(request: NextRequest) {
   try {
     const user = await authenticateUser(request);
     const { searchParams } = new URL(request.url);
+    const adminAttendantId = user.is_admin ? searchParams.get("attendantId") : null;
 
     const requestedPeriod = Number(searchParams.get("periodDays"));
     const rawStartDate = searchParams.get("startDate");
@@ -123,8 +123,8 @@ export async function GET(request: NextRequest) {
 
     const analysisPeriodDays = useCustomRange
       ? Math.floor(
-          (Date.parse(endDate!) - Date.parse(startDate!)) / (1000 * 60 * 60 * 24),
-        ) + 1
+        (Date.parse(endDate!) - Date.parse(startDate!)) / (1000 * 60 * 60 * 24),
+      ) + 1
       : periodDays;
 
     const buildFilters = ({
@@ -135,13 +135,19 @@ export async function GET(request: NextRequest) {
       serviceAlias = "serv",
       applyUserFilter = true,
       paramOffset = 0,
+      adminAttendantId = null,
     }: FilterOptions = {}) => {
       const clauses: string[] = [];
       const params: Array<string | number> = [];
 
-      if (applyUserFilter && !user.is_admin) {
-        clauses.push(`${saleAlias}.attendant_id = $${params.length + 1 + paramOffset}`);
-        params.push(user.id);
+      if (applyUserFilter) {
+        if (!user.is_admin) {
+          clauses.push(`${saleAlias}.attendant_id = $${params.length + 1 + paramOffset}`);
+          params.push(user.id);
+        } else if (adminAttendantId) {
+          clauses.push(`${saleAlias}.attendant_id = $${params.length + 1 + paramOffset}`);
+          params.push(adminAttendantId);
+        }
       }
 
       if (includePeriod) {
@@ -177,19 +183,11 @@ export async function GET(request: NextRequest) {
     const periodTotalsFilters = buildFilters({
       includePeriod: true,
       includeService: true,
+      adminAttendantId,
     });
 
-    const periodTotalsQuery = `
-      SELECT
-        COUNT(DISTINCT s.id) AS sales_count,
-        COALESCE(SUM(s.total), 0)::numeric AS total_value,
-        COALESCE(SUM(si.quantity), 0)::int AS total_units,
-        COALESCE(SUM(
-          CASE WHEN ${normalizedExpr} LIKE 'reclam%' THEN si.quantity ELSE 0 END
-        ), 0)::int AS reclamacoes_units,
-        COALESCE(SUM(
-          CASE WHEN ${normalizedExpr} LIKE 'atras%' THEN si.quantity ELSE 0 END
-        ), 0)::int AS atrasos_units
+    const baseFilterQuery = `
+      SELECT DISTINCT s.id
       FROM sales s
       LEFT JOIN sale_items si ON si.sale_id = s.id
       LEFT JOIN services serv ON si.product_id = serv.id
@@ -197,9 +195,38 @@ export async function GET(request: NextRequest) {
         ${periodTotalsFilters.clause}
     `;
 
+const periodTotalsQuery = `
+      SELECT
+        (SELECT COUNT(*) FROM (${baseFilterQuery}) as fs) AS sales_count,
+        (SELECT COALESCE(SUM(total), 0) FROM sales WHERE id IN (${baseFilterQuery}))::numeric AS total_value,
+        (SELECT COALESCE(SUM(refund_total), 0) FROM sales WHERE id IN (${baseFilterQuery}))::numeric AS total_refund,
+        (SELECT COALESCE(SUM(commission_amount), 0) FROM sales WHERE id IN (${baseFilterQuery}))::numeric AS total_commission,
+        (SELECT COALESCE(SUM(total_discount), 0) FROM sales WHERE id IN (${baseFilterQuery}))::numeric AS total_discount,
+        (
+          SELECT COALESCE(SUM(si.quantity), 0)
+          FROM sale_items si
+          WHERE si.sale_id IN (${baseFilterQuery})
+        )::int AS total_units,
+        (
+          SELECT COALESCE(SUM(si.quantity), 0)
+          FROM sale_items si
+          LEFT JOIN services serv ON si.product_id = serv.id
+          WHERE si.sale_id IN (${baseFilterQuery})
+          AND (${normalizeServiceSql('COALESCE(serv.name, si.product_name)')} LIKE 'reclam%')
+        )::int AS reclamacoes_units,
+        (
+          SELECT COALESCE(SUM(si.quantity), 0)
+          FROM sale_items si
+          LEFT JOIN services serv ON si.product_id = serv.id
+          WHERE si.sale_id IN (${baseFilterQuery})
+          AND (${normalizeServiceSql('COALESCE(serv.name, si.product_name)')} LIKE 'atras%')
+        )::int AS atrasos_units
+    `;
+
     const pendingFilters = buildFilters({
       includePeriod: true,
       includeService: true,
+      adminAttendantId,
     });
 
     const pendingQuery = `
@@ -216,6 +243,7 @@ export async function GET(request: NextRequest) {
       includeService: false,
       saleAlias: "sp",
       applyUserFilter: true,
+      adminAttendantId,
     });
 
     const packagesQuery = `
@@ -231,6 +259,7 @@ export async function GET(request: NextRequest) {
     const topServicesFilters = buildFilters({
       includePeriod: true,
       includeService: true,
+      adminAttendantId,
     });
 
     const topServicesQuery = `
@@ -255,6 +284,7 @@ export async function GET(request: NextRequest) {
     const recentSalesFilters = buildFilters({
       includePeriod: true,
       includeService: true,
+      adminAttendantId,
     });
 
     const recentSalesQuery = `
@@ -278,6 +308,7 @@ export async function GET(request: NextRequest) {
     const servicePerformanceFilters = buildFilters({
       includePeriod: true,
       includeService: true,
+      adminAttendantId,
     });
 
     const servicePerformanceQuery = `
@@ -287,7 +318,14 @@ export async function GET(request: NextRequest) {
           NULLIF(TRIM(si.product_name), ''),
           'Nao informado'
         ) AS service_name,
-        COALESCE(SUM(si.total), 0)::numeric AS total_value,
+        COALESCE(
+          SUM(
+            si.total
+            - COALESCE(s.refund_total, 0)
+              * (si.total / NULLIF((s.total + COALESCE(s.refund_total, 0)), 0))
+          ),
+          0
+        )::numeric AS total_value,
         COALESCE(SUM(si.quantity), 0)::int AS total_quantity,
         COUNT(DISTINCT s.id) AS sale_count
       FROM sale_items si
@@ -303,6 +341,7 @@ export async function GET(request: NextRequest) {
     const clientSpendingFilters = buildFilters({
       includePeriod: true,
       includeService: true,
+      adminAttendantId,
     });
 
     const clientSpendingQuery = `
@@ -324,6 +363,7 @@ export async function GET(request: NextRequest) {
     const clientFrequencyFilters = buildFilters({
       includePeriod: true,
       includeService: true,
+      adminAttendantId,
     });
 
     const clientFrequencyQuery = `
@@ -355,6 +395,7 @@ export async function GET(request: NextRequest) {
       saleItemAlias: "si",
       serviceAlias: "serv",
       paramOffset: 1,
+      adminAttendantId,
     });
 
     const attendantPerformanceQuery = `
@@ -364,7 +405,14 @@ export async function GET(request: NextRequest) {
           NULLIF(TRIM(si.product_name), ''),
           'Nao informado'
         ) AS service_name,
-        COALESCE(SUM(si.total), 0)::numeric AS total_value,
+        COALESCE(
+          SUM(
+            si.total
+            - COALESCE(s.refund_total, 0)
+              * (si.total / NULLIF((s.total + COALESCE(s.refund_total, 0)), 0))
+          ),
+          0
+        )::numeric AS total_value,
         COALESCE(SUM(si.quantity), 0)::int AS total_quantity,
         COUNT(DISTINCT s.id) AS sale_count
       FROM sale_items si
@@ -397,7 +445,7 @@ export async function GET(request: NextRequest) {
       query(clientSpendingQuery, clientSpendingFilters.params),
       query(clientFrequencyQuery, clientFrequencyFilters.params),
       query(attendantPerformanceQuery, [
-        user.id,
+        adminAttendantId ?? user.id,
         ...attendantServiceFilters.params,
       ]),
     ]);
@@ -405,13 +453,13 @@ export async function GET(request: NextRequest) {
     const pendingSales = Number(pendingResult.rows[0]?.count ?? 0);
     const activePackages = Number(packagesResult.rows[0]?.count ?? 0);
 
-    const topServices = topServicesResult.rows.map((row) => ({
+    const topServices = topServicesResult.rows.map((row: any) => ({
       name: row.name,
       count: Number(row.sale_count ?? 0),
       total: Number(row.total_revenue ?? 0),
     }));
 
-    const recentSales = recentSalesResult.rows.map((row) => ({
+    const recentSales = recentSalesResult.rows.map((row: any) => ({
       id: row.id,
       clientName: row.client_name,
       total: Number(row.total ?? 0),
@@ -419,14 +467,14 @@ export async function GET(request: NextRequest) {
       saleDate: row.sale_date,
     }));
 
-    const servicePerformance = servicePerformanceResult.rows.map((row) => ({
+    const servicePerformance = servicePerformanceResult.rows.map((row: any) => ({
       name: row.service_name,
       totalValue: Number(row.total_value ?? 0),
       totalQuantity: Number(row.total_quantity ?? 0),
       totalSales: Number(row.sale_count ?? 0),
     }));
 
-    const attendantServices = attendantPerformanceResult.rows.map((row) => ({
+    const attendantServices = attendantPerformanceResult.rows.map((row: any) => ({
       name: row.service_name,
       totalValue: Number(row.total_value ?? 0),
       totalQuantity: Number(row.total_quantity ?? 0),
@@ -434,7 +482,7 @@ export async function GET(request: NextRequest) {
     }));
 
     const attendantTotals = attendantServices.reduce(
-      (acc, item) => {
+      (acc: any, item: any) => {
         acc.totalValue += item.totalValue;
         acc.totalQuantity += item.totalQuantity;
         acc.totalSales += item.totalSales;
@@ -443,13 +491,13 @@ export async function GET(request: NextRequest) {
       { totalValue: 0, totalQuantity: 0, totalSales: 0 },
     );
 
-    const clientSpending = clientSpendingResult.rows.map((row) => ({
+    const clientSpending = clientSpendingResult.rows.map((row: any) => ({
       clientName: row.client_name,
       totalValue: Number(row.total_value ?? 0),
       totalQuantity: Number(row.total_quantity ?? 0),
     }));
 
-    const clientFrequency = clientFrequencyResult.rows.map((row) => ({
+    const clientFrequency = clientFrequencyResult.rows.map((row: any) => ({
       clientName: row.client_name,
       salesCount: Number(row.sales_count ?? 0),
     }));
@@ -460,9 +508,12 @@ export async function GET(request: NextRequest) {
     const periodTotalsRow = periodTotalsResult.rows[0] ?? {
       sales_count: 0,
       total_value: 0,
+      total_refund: 0,
       total_units: 0,
       reclamacoes_units: 0,
       atrasos_units: 0,
+      total_commission: 0,
+      total_discount: 0,
     };
 
     return NextResponse.json({
@@ -472,9 +523,12 @@ export async function GET(request: NextRequest) {
       periodTotals: {
         salesCount: Number(periodTotalsRow.sales_count ?? 0),
         totalValue: Number(periodTotalsRow.total_value ?? 0),
+        refundTotal: Number(periodTotalsRow.total_refund ?? 0),
         totalUnits: Number(periodTotalsRow.total_units ?? 0),
         reclamacoesUnits: Number(periodTotalsRow.reclamacoes_units ?? 0),
         atrasosUnits: Number(periodTotalsRow.atrasos_units ?? 0),
+        totalCommission: Number(periodTotalsRow.total_commission ?? 0),
+        totalDiscount: Number(periodTotalsRow.total_discount ?? 0),
       },
       activePackages,
       pendingSales,

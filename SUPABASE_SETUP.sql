@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS clients (
     email VARCHAR(255),
     cpf_cnpj VARCHAR(18),
     origin_id UUID REFERENCES client_origins(id) ON DELETE SET NULL,
+    client_type VARCHAR(20) NOT NULL DEFAULT 'common'
+        CHECK (client_type IN ('common', 'package')),
+    responsible_name VARCHAR(200),
+    reference_contact VARCHAR(200),
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -84,6 +88,7 @@ CREATE TABLE IF NOT EXISTS clients (
 CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
 CREATE INDEX IF NOT EXISTS idx_clients_phone ON clients(phone);
 CREATE INDEX IF NOT EXISTS idx_clients_email ON clients(email);
+CREATE INDEX IF NOT EXISTS idx_clients_client_type ON clients(client_type);
 
 -- Services Table
 CREATE TABLE IF NOT EXISTS services (
@@ -254,6 +259,24 @@ CREATE TABLE IF NOT EXISTS package_consumptions (
 ALTER TABLE sale_items
 ADD COLUMN IF NOT EXISTS sale_type VARCHAR(2) NOT NULL DEFAULT '01'
 CHECK (sale_type IN ('01', '02'));
+
+-- 013: Add package client fields
+ALTER TABLE clients
+    ADD COLUMN IF NOT EXISTS client_type VARCHAR(20) NOT NULL DEFAULT 'common'
+        CHECK (client_type IN ('common', 'package')),
+    ADD COLUMN IF NOT EXISTS responsible_name VARCHAR(200),
+    ADD COLUMN IF NOT EXISTS reference_contact VARCHAR(200);
+
+UPDATE clients
+SET client_type = 'package'
+WHERE client_type = 'common'
+  AND id IN (SELECT DISTINCT client_id FROM client_packages);
+
+CREATE INDEX IF NOT EXISTS idx_clients_client_type ON clients(client_type);
+
+COMMENT ON COLUMN clients.client_type IS 'Tipo de cliente: common (padrao) ou package (transportadora)';
+COMMENT ON COLUMN clients.responsible_name IS 'Nome do responsavel pelo contrato/conta (clientes de pacote)';
+COMMENT ON COLUMN clients.reference_contact IS 'Contato de referencia do cliente de pacote (telefone/email)';
 
 -- =====================================================
 -- 5. FUNCTIONS & TRIGGERS

@@ -95,7 +95,7 @@ export async function GET(request: NextRequest) {
         isActive: product.is_active,
         createdAt: product.created_at,
         updatedAt: product.updated_at,
-        priceRanges: priceRangesResult.rows.map((range) => ({
+        priceRanges: priceRangesResult.rows.map((range: any) => ({
           id: range.id,
           minQuantity: range.min_quantity,
           maxQuantity: range.max_quantity,

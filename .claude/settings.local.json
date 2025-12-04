@@ -21,7 +21,13 @@
       "Bash(set NODE_OPTIONS=--dns-result-order=ipv4first)",
       "Bash(taskkill:*)",
       "Bash(timeout /t 3 /nobreak)",
-      "Bash(ipconfig:*)"
+      "Bash(ipconfig:*)",
+      "Bash(netstat:*)",
+      "Bash(curl -I http://localhost:3000)",
+      "Bash(tasklist:*)",
+      "Bash(chcp 65001)",
+      "Bash(iconv:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

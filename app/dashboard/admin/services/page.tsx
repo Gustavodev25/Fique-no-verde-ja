@@ -12,6 +12,7 @@ import { useAdminGuard } from "@/hooks/useAdminGuard";
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/Button";
 import { Modal } from "@/components/Modal";
+import { Select } from "@/components/Select";
 
 type ServiceRange = {
   id: string;
@@ -210,7 +211,7 @@ export default function AdminServicesPage() {
   const handleFormChange = (
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => {
-    const { name, value, type, checked } = event.target;
+    const { name, value, type, checked } = event.target as any;
     setFormData((prev) => ({
       ...prev,
       [name]: type === "checkbox" ? checked : value,
@@ -507,44 +508,55 @@ export default function AdminServicesPage() {
                     Faixas cadastradas
                   </p>
                   <div className="space-y-2">
-                    {service.priceRanges.map((range, index, array) => {
-                      const isReclamacao = service.name.toLowerCase().includes('reclamacao');
-                      const isFirstRange = index === 0;
-                      const showProgressiveNote = isReclamacao && isFirstRange;
+                    {service.priceRanges
+                      .sort((a, b) => a.minQuantity - b.minQuantity)
+                      .map((range, index, array) => {
+                        const isReclamacao = service.name.toLowerCase().includes('reclamacao');
+                        const isFirstRange = index === 0;
+                        const isSecondRange = index === 1;
+                        
+                        // Assuming the first range is the base tier (e.g., 1-10)
+                        const firstRangeMax = array[0]?.maxQuantity ?? 10;
+                        const firstRangePrice = array[0]?.unitPrice ?? 40;
 
-                      return (
-                        <div
-                          key={range.id}
-                          className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-2"
-                        >
-                          <div className="flex flex-col gap-1 text-xs text-gray-400">
-                            <div className="flex items-center justify-between flex-wrap gap-2">
-                              <span>
-                                {saleTypeLabels[range.saleType]} ·{" "}
-                                {formatQuantityRange(
-                                  range.minQuantity,
-                                  range.maxQuantity,
-                                )}
-                              </span>
-                              <span>
-                                Vigencia:{" "}
-                                {dateFormatter.format(
-                                  new Date(range.effectiveFrom),
-                                )}
-                              </span>
-                            </div>
-                            {showProgressiveNote && (
-                              <div className="mt-1 px-2 py-1 bg-blue-500/10 border border-blue-500/30 rounded text-blue-300">
-                                Calculo progressivo: as primeiras {range.maxQuantity} sempre valem R$ {range.unitPrice.toFixed(2)} cada
+                        return (
+                          <div
+                            key={range.id}
+                            className="rounded-xl border border-white/10 bg-black/20 p-3 space-y-2"
+                          >
+                            <div className="flex flex-col gap-1 text-xs text-gray-400">
+                              <div className="flex items-center justify-between flex-wrap gap-2">
+                                <span>
+                                  {saleTypeLabels[range.saleType]} ·{" "}
+                                  {formatQuantityRange(
+                                    range.minQuantity,
+                                    range.maxQuantity,
+                                  )}
+                                </span>
+                                <span>
+                                  Vigencia:{" "}
+                                  {dateFormatter.format(
+                                    new Date(range.effectiveFrom),
+                                  )}
+                                </span>
                               </div>
+                            </div>
+                            <p className="text-lg font-semibold">
+                              {currencyFormatter.format(range.unitPrice)}
+                            </p>
+                            {isReclamacao && isFirstRange && (
+                              <p className="text-xs text-blue-300">
+                                Valor por unidade (unitário)
+                              </p>
+                            )}
+                            {isReclamacao && isSecondRange && (
+                              <p className="text-xs text-blue-300">
+                                Sendo os {firstRangeMax} primeiros a {currencyFormatter.format(firstRangePrice)} / cada.
+                              </p>
                             )}
                           </div>
-                          <p className="text-lg font-semibold">
-                            {currencyFormatter.format(range.unitPrice)}
-                          </p>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
                   </div>
                 </div>
               ) : (
@@ -665,26 +677,18 @@ export default function AdminServicesPage() {
                 >
                   <div className="flex items-center gap-3 flex-wrap">
                     <div className="flex-1">
-                      <label className="block text-xs uppercase text-gray-400 mb-1">
-                        Tipo de venda
-                      </label>
-                      <select
+                      <Select
+                        label="Tipo de venda"
                         value={range.saleType}
-                        onChange={(event) =>
+                        onChange={(event: any) =>
                           handleRangeChange(
                             index,
                             "saleType",
                             event.target.value,
                           )
                         }
-                        className="w-full rounded-xl border border-white/20 bg-black/40 px-4 py-2.5 text-white focus:border-white focus:outline-none"
-                      >
-                        {saleTypeOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                        options={saleTypeOptions}
+                      />
                     </div>
                     {rangeForms.length > 1 && (
                       <button

@@ -36,6 +36,7 @@ type Sale = {
   id: string;
   clientName: string;
   attendantName: string;
+  attendantId: string;
   saleDate: string;
   observations: string | null;
   status: SaleStatus;
@@ -44,6 +45,8 @@ type Sale = {
   generalDiscountValue: number;
   subtotal: number;
   total: number;
+  refundTotal?: number;
+  commissionAmount?: number;
   items: SaleItem[];
   createdAt: string;
   updatedAt: string;
@@ -52,6 +55,12 @@ type Sale = {
 type Client = {
   id: string;
   name: string;
+  clientType: "common" | "package";
+};
+
+type AttendantOption = {
+  value: string;
+  label: string;
 };
 
 type Service = {
@@ -70,6 +79,7 @@ type Service = {
 
 const initialForm = {
   clientId: "",
+  carrierId: "",
   serviceId: "",
   saleType: "01" as "01" | "02" | "03",
   quantity: 1,
@@ -115,26 +125,93 @@ export default function SalesPage() {
   const [viewingSale, setViewingSale] = useState<Sale | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<Sale | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Sale | null>(null);
+  const [refundTarget, setRefundTarget] = useState<Sale | null>(null);
+  const [refundAmount, setRefundAmount] = useState("");
+  const [refundReason, setRefundReason] = useState("");
+  const [refundSaving, setRefundSaving] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [serviceFilter, setServiceFilter] = useState("");
+  const [attendantFilter, setAttendantFilter] = useState("");
+  const [dayType, setDayType] = useState<"" | "weekday" | "non_working">("");
+  const [attendants, setAttendants] = useState<AttendantOption[]>([]);
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const [sortField, setSortField] = useState<"date" | "client" | "total">("date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+
+  const hasFilters = useMemo(
+    () => Boolean(startDate || endDate || serviceFilter || attendantFilter || dayType),
+    [startDate, endDate, serviceFilter, attendantFilter, dayType]
+  );
+
+  const filteredSales = useMemo(() => {
+    let result = [...sales];
+
+    const getDayType = (dateString: string) => {
+      const d = new Date(dateString);
+      const dow = d.getDay(); // 0 dom .. 6 sab
+      return dow === 0 || dow === 6 ? "non_working" : "weekday";
+    };
+
+    if (startDate) {
+      const start = new Date(`${startDate}T00:00:00`);
+      result = result.filter((sale) => new Date(sale.saleDate) >= start);
+    }
+    if (endDate) {
+      const end = new Date(`${endDate}T23:59:59.999`);
+      result = result.filter((sale) => new Date(sale.saleDate) <= end);
+    }
+    if (serviceFilter) {
+      const selectedService = services.find((s) => s.id === serviceFilter);
+      const targetName = selectedService?.name?.toLowerCase() || "";
+      result = result.filter((sale) =>
+        sale.items?.some((item) => item.productName.toLowerCase() === targetName)
+      );
+    }
+    if (isAdmin && attendantFilter) {
+      result = result.filter((sale) => sale.attendantId === attendantFilter);
+    }
+    if (dayType) {
+      result = result.filter((sale) => getDayType(sale.saleDate) === dayType);
+    }
+
+    return result;
+  }, [attendantFilter, dayType, endDate, isAdmin, sales, serviceFilter, services, startDate]);
+
+  const sortedSales = useMemo(() => {
+    const sorted = [...filteredSales];
+    sorted.sort((a, b) => {
+      if (sortField === "date") {
+        return (new Date(a.saleDate).getTime() - new Date(b.saleDate).getTime()) * (sortDirection === "asc" ? 1 : -1);
+      }
+      if (sortField === "client") {
+        return a.clientName.localeCompare(b.clientName) * (sortDirection === "asc" ? 1 : -1);
+      }
+      // total
+      return (a.total - b.total) * (sortDirection === "asc" ? 1 : -1);
+    });
+    return sorted;
+  }, [filteredSales, sortField, sortDirection]);
 
   const totalSalesCopy = useMemo(() => {
-    if (sales.length === 0) {
+    if (sortedSales.length === 0) {
       return "Nenhuma venda cadastrada ainda";
     }
 
-    return `${sales.length} ${
-      sales.length === 1 ? "venda encontrada" : "vendas encontradas"
+    return `${sortedSales.length} ${
+      sortedSales.length === 1 ? "venda encontrada" : "vendas encontradas"
     }`;
-  }, [sales.length]);
+  }, [sortedSales.length]);
 
-  const totalPages = Math.ceil(sales.length / ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(sortedSales.length / ITEMS_PER_PAGE);
 
   const paginatedSales = useMemo(() => {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
     const endIndex = startIndex + ITEMS_PER_PAGE;
-    return sales.slice(startIndex, endIndex);
-  }, [sales, currentPage]);
+    return sortedSales.slice(startIndex, endIndex);
+  }, [sortedSales, currentPage]);
 
   const fetchSales = useCallback(async () => {
     const token = localStorage.getItem("token");
@@ -146,7 +223,11 @@ export default function SalesPage() {
 
     setLoading(true);
     try {
-      const response = await fetch("/api/sales", {
+      const params = new URLSearchParams();
+      if (isAdmin && attendantFilter) {
+        params.set("attendantId", attendantFilter);
+      }
+      const response = await fetch(`/api/sales?${params.toString()}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -167,7 +248,7 @@ export default function SalesPage() {
     } finally {
       setLoading(false);
     }
-  }, [error]);
+  }, [attendantFilter, error, isAdmin]);
 
   const fetchClients = useCallback(async () => {
     const token = localStorage.getItem("token");
@@ -187,7 +268,15 @@ export default function SalesPage() {
 
       if (response.ok) {
         setClients(
-          data.clients.map((c: any) => ({ id: c.id, name: c.name }))
+          data.clients.map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            // API retorna client_type em snake_case; garante valor padrao
+            clientType:
+              c.client_type === "package" || c.clientType === "package"
+                ? "package"
+                : "common",
+          }))
         );
       }
     } catch (err) {
@@ -227,6 +316,53 @@ export default function SalesPage() {
     }
   }, []);
 
+  const fetchAttendants = useCallback(async () => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    try {
+      const res = await fetch("/api/admin/users", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.users)) {
+        setAttendants(
+          data.users.map((u: any) => ({
+            value: u.id,
+            label: `${u.first_name} ${u.last_name}`.trim() || u.email,
+          }))
+        );
+      }
+    } catch (err) {
+      console.error("Erro ao carregar atendentes:", err);
+    }
+  }, []);
+
+  const fetchCurrentUser = useCallback(async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      setIsAdmin(false);
+      return;
+    }
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (response.ok && data.user) {
+        const adminFlag = Boolean(data.user.is_admin);
+        setIsAdmin(adminFlag);
+        if (adminFlag) {
+          fetchAttendants();
+        }
+      } else {
+        setIsAdmin(false);
+      }
+    } catch (err) {
+      console.error("Erro ao carregar usuario atual:", err);
+      setIsAdmin(false);
+    }
+  }, [fetchAttendants]);
+
   const fetchClientPackages = useCallback(async () => {
     const token = localStorage.getItem("token");
 
@@ -245,14 +381,14 @@ export default function SalesPage() {
 
       if (response.ok) {
         setClientPackages(
-          data.packages.map((p: any) => ({
+          (data.packages || []).map((p: any) => ({
             id: p.id,
-            clientId: p.clientId,
-            clientName: p.clientName,
-            serviceId: p.serviceId,
-            serviceName: p.serviceName,
-            availableQuantity: p.availableQuantity,
-            unitPrice: p.unitPrice,
+            clientId: p.clientId ?? p.client_id,
+            clientName: p.clientName ?? p.client_name,
+            serviceId: p.serviceId ?? p.service_id,
+            serviceName: p.serviceName ?? p.service_name,
+            availableQuantity: Number(p.availableQuantity ?? p.available_quantity ?? 0),
+            unitPrice: Number(p.unitPrice ?? p.unit_price ?? 0),
           }))
         );
       }
@@ -266,16 +402,55 @@ export default function SalesPage() {
     fetchClients();
     fetchServices();
     fetchClientPackages();
-  }, [fetchSales, fetchClients, fetchServices, fetchClientPackages]);
+    fetchCurrentUser();
+  }, [fetchSales, fetchClients, fetchServices, fetchClientPackages, fetchCurrentUser]);
 
   const handleChange = (
     event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = event.target;
+    if (name === "saleType") {
+      setFormData((prev) => ({
+        ...prev,
+        saleType: value as "01" | "02" | "03",
+        clientId: "",
+        carrierId: "",
+        packageId: "",
+        serviceId: "",
+      }));
+      return;
+    }
+    if (name === "carrierId") {
+      setFormData((prev) => ({
+        ...prev,
+        carrierId: value,
+        clientId: prev.saleType === "02" ? value : prev.clientId,
+        packageId: prev.saleType === "03" ? "" : prev.packageId,
+      }));
+      return;
+    }
+    if (name === "clientId") {
+      setFormData((prev) => ({
+        ...prev,
+        clientId: value,
+        packageId: prev.saleType === "03" ? "" : prev.packageId,
+      }));
+      return;
+    }
     setFormData((prev) => ({
       ...prev,
       [name]: value,
     }));
+  };
+
+  const toggleSort = (field: "date" | "client" | "total") => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+    setCurrentPage(1);
   };
 
   const openModal = () => {
@@ -288,33 +463,42 @@ export default function SalesPage() {
     setFormData(initialForm);
   };
 
+  const openRefundModal = (sale: Sale) => {
+    setRefundTarget(sale);
+    setRefundAmount(String(sale.total ?? 0));
+    setRefundReason("");
+  };
+
+  const closeRefundModal = () => {
+    setRefundTarget(null);
+    setRefundAmount("");
+    setRefundReason("");
+  };
+
   const selectedService = useMemo(() => {
     return services.find((s) => s.id === formData.serviceId);
   }, [services, formData.serviceId]);
 
-  // Filtrar clientes que possuem pacotes (para tipo 03)
-  const clientsWithPackages = useMemo(() => {
-    if (formData.saleType !== "03") return [];
+  const carriers = useMemo(
+    () => clients.filter((client) => client.clientType === "package"),
+    [clients]
+  );
 
-    // Obter IDs únicos de clientes que possuem pacotes
-    const clientIdsWithPackages = new Set(
-      clientPackages
-        .filter((pkg) => pkg.availableQuantity > 0)
-        .map((pkg) => pkg.clientId)
-    );
+  const commonClients = useMemo(
+    () => clients.filter((client) => client.clientType !== "package"),
+    [clients]
+  );
 
-    // Retornar apenas clientes que têm pacotes
-    return clients.filter((client) => clientIdsWithPackages.has(client.id));
-  }, [formData.saleType, clientPackages, clients]);
+  const clientOptions = useMemo(() => commonClients, [commonClients]);
 
-  // Filtrar pacotes do cliente selecionado (para tipo 03)
+// Filtrar pacotes da transportadora selecionada (para tipo 03)
   const availablePackages = useMemo(() => {
-    if (formData.saleType !== "03" || !formData.clientId) return [];
+    if (formData.saleType !== "03" || !formData.carrierId) return [];
 
     return clientPackages.filter((pkg) => {
-      return pkg.clientId === formData.clientId && pkg.availableQuantity > 0;
+      return pkg.clientId === formData.carrierId && pkg.availableQuantity > 0;
     });
-  }, [clientPackages, formData.saleType, formData.clientId]);
+  }, [clientPackages, formData.saleType, formData.carrierId]);
 
   // Pacote selecionado para consumo
   const selectedPackage = useMemo(() => {
@@ -399,8 +583,16 @@ export default function SalesPage() {
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    // Validações específicas por tipo
+    // Validacoes especificas por tipo
     if (formData.saleType === "03") {
+      if (!formData.carrierId) {
+        error("Selecione a transportadora (cliente de pacote).");
+        return;
+      }
+      if (!formData.clientId) {
+        error("Selecione o cliente final.");
+        return;
+      }
       // Tipo 03 - Consumo de Pacote
       if (!formData.packageId) {
         error("Selecione um pacote para consumir");
@@ -408,18 +600,20 @@ export default function SalesPage() {
       }
 
       if (!selectedPackage) {
-        error("Pacote não encontrado");
+        error("Pacote nao encontrado");
         return;
       }
 
       if (formData.quantity > selectedPackage.availableQuantity) {
-        error(
-          `Quantidade solicitada (${formData.quantity}) excede o saldo disponível (${selectedPackage.availableQuantity})`
-        );
+        error(`Quantidade solicitada (${formData.quantity}) excede o saldo disponivel (${selectedPackage.availableQuantity})`);
         return;
       }
     } else {
       // Tipo 01 e 02 - Comum e Venda de Pacote
+      if (formData.saleType === "02" && !formData.carrierId) {
+        error("Selecione a transportadora (cliente de pacote).");
+        return;
+      }
       if (!formData.serviceId) {
         error("Selecione um serviço");
         return;
@@ -430,7 +624,6 @@ export default function SalesPage() {
         return;
       }
     }
-
     if (formData.quantity <= 0) {
       error("Quantidade deve ser maior que zero");
       return;
@@ -507,7 +700,12 @@ export default function SalesPage() {
       console.log("Unit Price:", calculatedUnitPrice);
 
       const payload: any = {
-        clientId: formData.saleType === "03" ? selectedPackage!.clientId : formData.clientId,
+        clientId:
+          formData.saleType === "03"
+            ? formData.clientId
+            : formData.saleType === "02"
+              ? formData.carrierId
+              : formData.clientId,
         observations: formData.observations,
         paymentMethod: formData.paymentMethod,
         saleType: formData.saleType,
@@ -532,8 +730,10 @@ export default function SalesPage() {
       if (formData.saleType === "03") {
         payload.packageId = formData.packageId;
         payload.serviceId = selectedPackage!.serviceId;
+        payload.carrierId = formData.carrierId;
       } else if (formData.saleType === "02") {
         payload.serviceId = formData.serviceId;
+        payload.carrierId = formData.carrierId;
       }
 
       console.log("DEBUG MODAL - Payload:", JSON.stringify(payload, null, 2));
@@ -638,6 +838,59 @@ export default function SalesPage() {
     }
   };
 
+  const handleRefund = async () => {
+    if (!refundTarget) return;
+
+    const parsedAmount = parseFloat(String(refundAmount).replace(",", "."));
+    if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      error("Informe um valor de estorno valido");
+      return;
+    }
+
+    const available = refundTarget.total || 0;
+    if (parsedAmount > available) {
+      error("Valor de estorno maior que o total disponivel para esta venda");
+      return;
+    }
+
+    const token = localStorage.getItem("token");
+    if (!token) {
+      error("Sessao expirada. Faca login novamente.");
+      return;
+    }
+
+    setRefundSaving(true);
+    try {
+      const response = await fetch("/api/sales/refund", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          saleId: refundTarget.id,
+          amount: parsedAmount,
+          reason: refundReason,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao registrar estorno");
+      }
+
+      success("Estorno registrado com sucesso!");
+      closeRefundModal();
+      await fetchSales();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Erro ao registrar estorno";
+      error(message);
+    } finally {
+      setRefundSaving(false);
+    }
+  };
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -675,13 +928,135 @@ export default function SalesPage() {
           </Button>
         </div>
 
+        <div className="px-6 py-4 border-b border-white/10 bg-black/20 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="flex flex-col gap-1">
+              <p className="text-xs uppercase text-gray-400">Data (de)</p>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-white text-sm focus:border-white focus:outline-none"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="text-xs uppercase text-gray-400">Data (ate)</p>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-white text-sm focus:border-white focus:outline-none"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="text-xs uppercase text-gray-400">Serviço</p>
+              <select
+                value={serviceFilter}
+                onChange={(e) => {
+                  setServiceFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-white text-sm focus:border-white focus:outline-none"
+              >
+                <option value="">Todos</option>
+                {services.map((service) => (
+                  <option key={service.id} value={service.id}>
+                    {service.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {isAdmin && (
+              <div className="flex flex-col gap-1">
+                <p className="text-xs uppercase text-gray-400">Atendente</p>
+                <select
+                  value={attendantFilter}
+                  onChange={(e) => {
+                    setAttendantFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-white text-sm focus:border-white focus:outline-none"
+                >
+                  <option value="">Todos</option>
+                  {attendants.map((att) => (
+                    <option key={att.value} value={att.value}>
+                      {att.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => toggleSort("date")}
+                className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
+                  sortField === "date"
+                    ? "border-blue-400/60 bg-blue-500/20 text-blue-100"
+                    : "border-white/20 bg-white/5 text-white hover:bg-white/10"
+                }`}
+              >
+                Data {sortField === "date" ? `(${sortDirection.toUpperCase()})` : ""}
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSort("client")}
+                className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
+                  sortField === "client"
+                    ? "border-blue-400/60 bg-blue-500/20 text-blue-100"
+                    : "border-white/20 bg-white/5 text-white hover:bg-white/10"
+                }`}
+              >
+                Cliente {sortField === "client" ? `(${sortDirection.toUpperCase()})` : ""}
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSort("total")}
+                className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
+                  sortField === "total"
+                    ? "border-blue-400/60 bg-blue-500/20 text-blue-100"
+                    : "border-white/20 bg-white/5 text-white hover:bg-white/10"
+                }`}
+              >
+                Valor {sortField === "total" ? `(${sortDirection.toUpperCase()})` : ""}
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setStartDate("");
+                  setEndDate("");
+                  setServiceFilter("");
+                  setAttendantFilter("");
+                  setSortField("date");
+                  setSortDirection("desc");
+                  setCurrentPage(1);
+                }}
+                className="px-4 py-2 text-sm rounded-lg border border-white/20 text-white hover:bg-white/10"
+              >
+                Limpar filtros
+              </button>
+            </div>
+          </div>
+        </div>
+
         {loading ? (
           <div className="px-6 py-10 text-center text-gray-300">
             Carregando vendas...
           </div>
-        ) : sales.length === 0 ? (
+        ) : sortedSales.length === 0 ? (
           <div className="px-6 py-16 text-center text-gray-400">
-            Ainda nao existem vendas cadastradas.
+            {hasFilters ? "Nenhuma venda encontrada com os filtros aplicados." : "Ainda nao existem vendas cadastradas."}
           </div>
         ) : (
           <div className="divide-y divide-white/10">
@@ -690,30 +1065,48 @@ export default function SalesPage() {
               return (
                 <div
                   key={sale.id}
-                  className="px-6 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
+                  className="px-6 py-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between hover:bg-white/5 transition-colors border-l-2 border-l-transparent hover:border-l-blue-500"
                 >
                   <div className="flex-1">
-                    <p className="font-semibold text-lg">{sale.clientName}</p>
-                    <div className="flex flex-wrap gap-3 text-sm text-gray-300 mt-1">
-                      <span>Atendente: {sale.attendantName}</span>
-                      <span>• {formatCurrency(sale.total)}</span>
-                      <span>• {paymentMethodLabels[sale.paymentMethod]}</span>
+                    <div className="flex items-baseline justify-between md:justify-start gap-4">
+                      <p className="font-semibold text-lg text-white">{sale.clientName}</p>
+                      <span className="md:hidden font-bold text-emerald-400">{formatCurrency(sale.total)}</span>
+                    </div>
+
+                    <div className="mt-2 space-y-1">
+                      {sale.items.map((item, idx) => (
+                        <div key={idx} className="flex items-center text-sm text-gray-200">
+                          <span className="font-medium">{item.productName}</span>
+                          <span className="mx-2 text-gray-600">|</span>
+                          <span className="text-gray-400 text-xs uppercase tracking-wide">Qtd: {item.quantity}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 mt-2">
+                      <span>{sale.attendantName}</span>
+                      <span>•</span>
+                      <span>{paymentMethodLabels[sale.paymentMethod]}</span>
+                      {typeof sale.commissionAmount === "number" && (
+                        <>
+                          <span>•</span>
+                          <span className="text-gray-400">Comissão: {formatCurrency(sale.commissionAmount)}</span>
+                        </>
+                      )}
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      <span className="px-3 py-1 rounded-full border border-white/20 text-gray-200">
-                        {new Date(sale.saleDate).toLocaleDateString("pt-BR")}
-                      </span>
-                      <span
-                        className={`px-3 py-1 rounded-full border ${statusColor.bg} ${statusColor.text} ${statusColor.border}`}
-                      >
-                        {statusLabels[sale.status]}
-                      </span>
+                    <div className="hidden md:block text-right mr-4">
+                      <p className="text-2xl font-bold text-emerald-400">{formatCurrency(sale.total)}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{new Date(sale.saleDate).toLocaleDateString("pt-BR")}</p>
                     </div>
 
-                    <div className="flex gap-2 md:ml-4">
+                    <div className="md:hidden">
+                      <p className="text-xs text-gray-500">{new Date(sale.saleDate).toLocaleDateString("pt-BR")}</p>
+                    </div>
+
+                    <div className="flex gap-2 md:ml-2">
                       <Button
                         size="sm"
                         variant="secondary"
@@ -743,14 +1136,25 @@ export default function SalesPage() {
                         </>
                       )}
                       {sale.status === "confirmada" && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="rounded-full px-4 py-1 border border-red-500/30 text-red-300 hover:bg-red-500/10"
-                          onClick={() => setCancelTarget(sale)}
-                        >
-                          Cancelar
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="rounded-full px-4 py-1 bg-amber-500/20 border-amber-500/40 text-amber-100 hover:bg-amber-500/30"
+                            disabled={sale.total <= 0}
+                            onClick={() => openRefundModal(sale)}
+                          >
+                            Estornar
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="rounded-full px-4 py-1 border border-red-500/30 text-red-300 hover:bg-red-500/10"
+                            onClick={() => setCancelTarget(sale)}
+                          >
+                            Cancelar
+                          </Button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -761,10 +1165,10 @@ export default function SalesPage() {
         )}
 
         {/* Paginação */}
-        {!loading && sales.length > ITEMS_PER_PAGE && (
+        {!loading && sortedSales.length > ITEMS_PER_PAGE && (
           <div className="px-6 py-4 border-t border-white/10 flex flex-col sm:flex-row gap-4 items-center justify-between">
             <p className="text-sm text-gray-400">
-              Página {currentPage} de {totalPages} • Mostrando {paginatedSales.length} de {sales.length} vendas
+              Página {currentPage} de {totalPages} • Mostrando {paginatedSales.length} de {sortedSales.length} vendas
             </p>
             <div className="flex items-center gap-2">
               <button
@@ -848,8 +1252,8 @@ export default function SalesPage() {
             </select>
           </div>
 
-          {/* Campo Cliente - apenas para tipo 01 e 02 */}
-          {formData.saleType !== "03" && (
+          {/* Cliente comum (apenas tipo 01) */}
+          {formData.saleType === "01" && (
             <div>
               <label className="block text-xs uppercase text-gray-400 mb-2">
                 Cliente
@@ -862,8 +1266,8 @@ export default function SalesPage() {
                 className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none"
               >
                 <option value="">Selecione o cliente</option>
-                {clients && clients.length > 0 ? (
-                  clients.map((client) => (
+                {clientOptions && clientOptions.length > 0 ? (
+                  clientOptions.map((client) => (
                     <option key={client.id} value={client.id}>
                       {client.name}
                     </option>
@@ -872,6 +1276,36 @@ export default function SalesPage() {
                   <option value="" disabled>Nenhum cliente cadastrado</option>
                 )}
               </select>
+            </div>
+          )}
+
+          {/* Transportadora (cliente de pacote) para venda/consumo de creditos */}
+          {(formData.saleType === "02" || formData.saleType === "03") && (
+            <div>
+              <label className="block text-xs uppercase text-gray-400 mb-2">
+                Transportadora (cliente de pacote)
+              </label>
+              <select
+                name="carrierId"
+                value={formData.carrierId}
+                onChange={handleChange}
+                required
+                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none"
+              >
+                <option value="">Selecione a transportadora</option>
+                {carriers && carriers.length > 0 ? (
+                  carriers.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="" disabled>Nenhum cliente de pacote cadastrado</option>
+                )}
+              </select>
+              <p className="text-xs text-gray-400 mt-2">
+                Selecione de qual transportadora esta vendendo ou consumindo creditos.
+              </p>
             </div>
           )}
 
@@ -908,7 +1342,7 @@ export default function SalesPage() {
               {/* Cliente (apenas clientes com pacotes) */}
               <div>
                 <label className="block text-xs uppercase text-gray-400 mb-2">
-                  Cliente (com pacotes)
+                  Cliente final
                 </label>
                 <select
                   name="clientId"
@@ -918,20 +1352,20 @@ export default function SalesPage() {
                   className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none"
                 >
                   <option value="">Selecione o cliente</option>
-                  {clientsWithPackages.length > 0 ? (
-                    clientsWithPackages.map((client) => (
+                  {clientOptions.length > 0 ? (
+                    clientOptions.map((client) => (
                       <option key={client.id} value={client.id}>
                         {client.name}
                       </option>
                     ))
                   ) : (
-                    <option value="" disabled>Nenhum cliente possui pacotes ativos</option>
+                    <option value="" disabled>Nenhum cliente cadastrado</option>
                   )}
                 </select>
               </div>
 
               {/* Pacote (aparece após selecionar cliente) */}
-              {formData.clientId && (
+              {formData.carrierId && (
                 <div>
                   <label className="block text-xs uppercase text-gray-400 mb-2">
                     Pacote para Consumir
@@ -1209,6 +1643,20 @@ export default function SalesPage() {
                 <span className="text-gray-400">Subtotal:</span>
                 <span>{formatCurrency(viewingSale.subtotal)}</span>
               </div>
+              {viewingSale.refundTotal ? (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Estornos aplicados:</span>
+                  <span className="text-red-300">
+                    -{formatCurrency(viewingSale.refundTotal)}
+                  </span>
+                </div>
+              ) : null}
+              {typeof viewingSale.commissionAmount === "number" ? (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Comissao:</span>
+                  <span>{formatCurrency(viewingSale.commissionAmount || 0)}</span>
+                </div>
+              ) : null}
               <div className="flex justify-between text-lg font-semibold">
                 <span>Total:</span>
                 <span className="text-green-400">{formatCurrency(viewingSale.total)}</span>
@@ -1289,6 +1737,87 @@ export default function SalesPage() {
               </span>
             )}
           </p>
+        )}
+      </Modal>
+
+      {/* Modal Estornar Venda */}
+      <Modal
+        open={Boolean(refundTarget)}
+        onClose={closeRefundModal}
+        title="Registrar estorno"
+        footer={
+          <div className="flex items-center justify-end gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-xl px-5"
+              onClick={closeRefundModal}
+            >
+              Voltar
+            </Button>
+            <Button
+              size="sm"
+              className="rounded-xl px-6 bg-amber-500/30 border border-amber-500/50 hover:bg-amber-500/50"
+              disabled={refundSaving}
+              onClick={handleRefund}
+            >
+              {refundSaving ? "Estornando..." : "Confirmar estorno"}
+            </Button>
+          </div>
+        }
+      >
+        {refundTarget && (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-1">
+              <p className="text-sm text-gray-400">Cliente</p>
+              <p className="font-semibold text-white">{refundTarget.clientName}</p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <p className="text-xs uppercase text-gray-400">Total disponivel</p>
+                <p className="text-lg font-semibold text-white">
+                  {formatCurrency(refundTarget.total)}
+                </p>
+              </div>
+              <div className="flex flex-col gap-1">
+                <p className="text-xs uppercase text-gray-400">Estornado ate agora</p>
+                <p className="text-lg font-semibold text-white">
+                  {formatCurrency(refundTarget.refundTotal || 0)}
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase text-gray-400 mb-2">
+                Valor do estorno
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={refundAmount}
+                onChange={(e) => setRefundAmount(e.target.value)}
+                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white placeholder-gray-400 focus:border-white focus:outline-none"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Maximo disponivel: {formatCurrency(refundTarget.total)}
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase text-gray-400 mb-2">
+                Motivo (opcional)
+              </label>
+              <textarea
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+                rows={3}
+                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white placeholder-gray-400 focus:border-white focus:outline-none resize-none"
+                placeholder="Descreva o motivo do estorno (opcional)"
+              />
+            </div>
+          </div>
         )}
       </Modal>
     </div>

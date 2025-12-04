@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   ChangeEvent,
@@ -11,6 +11,7 @@ import {
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/Button";
 import { useToast } from "@/components/Toast";
+import { Select } from "@/components/Select";
 
 type DiscountType = "percentage" | "fixed";
 type PaymentMethod =
@@ -131,6 +132,7 @@ export default function NewSalePage() {
   const [saving, setSaving] = useState(false);
   const [collaboratorName, setCollaboratorName] = useState("Carregando...");
   const [saleDate] = useState(() => new Date());
+  const [clientSearch, setClientSearch] = useState("");
 
   const selectedServiceDefinition = useMemo(() => {
     return services.find((service) => service.id === selectedService) ?? null;
@@ -141,6 +143,14 @@ export default function NewSalePage() {
     [services],
   );
 
+  const filteredClients = useMemo(() => {
+    const term = clientSearch.trim().toLowerCase();
+    if (!term) return clients;
+    return clients.filter((client) =>
+      client.name.toLowerCase().includes(term),
+    );
+  }, [clientSearch, clients]);
+
   const applicablePriceRange = useMemo(() => {
     if (!selectedServiceDefinition) {
       return null;
@@ -148,7 +158,7 @@ export default function NewSalePage() {
 
     const rangesByType = selectedServiceDefinition.priceRanges
       .filter((range) => range.saleType === saleType)
-      .sort((a, b) => a.minQuantity - b.minQuantity);
+      .sort((a, b) => b.minQuantity - a.minQuantity);
 
     const qty = quantity || 0;
     return (
@@ -284,57 +294,46 @@ export default function NewSalePage() {
       timeStyle: "short",
     }).format(saleDate);
   }, [saleDate]);
-
-  const calculateProgressivePrice = useCallback(
-    (qty: number, serviceName: string, ranges: ServiceRange[]): number => {
-      // Filtrar ranges pelo tipo de venda atual
-      const applicableRanges = ranges
-        .filter((r) => r.saleType === saleType)
-        .sort((a, b) => a.minQuantity - b.minQuantity);
-
-      if (applicableRanges.length === 0) {
-        return 0;
-      }
-
-      // Para "Reclamação", usar cálculo progressivo (como IR)
-      const isReclamacao = serviceName.toLowerCase().includes("reclamacao");
-
-      if (isReclamacao) {
-        // Fórmula simplificada:
-        // Se qty <= 10: qty × 40
-        // Se qty > 10: (qty - 10) × 15 + (10 × 40)
-        if (qty <= 10) {
-          return qty * (applicableRanges[0]?.unitPrice || 40);
-        } else {
-          const firstRangePrice = applicableRanges[0]?.unitPrice || 40;
-          const secondRangePrice = applicableRanges[1]?.unitPrice || 15;
-          return (qty - 10) * secondRangePrice + (10 * firstRangePrice);
-        }
-      } else {
-        // Para outros serviços (como "Atraso"), usar a faixa correspondente
-        const range = applicableRanges.find(
-          (r) =>
-            qty >= r.minQuantity &&
-            (r.maxQuantity === null || qty <= r.maxQuantity)
-        );
-
-        return range ? qty * range.unitPrice : 0;
-      }
-    },
-    [saleType]
-  );
-
   const subtotal = useMemo(() => {
-    if (!selectedService || !selectedServiceDefinition) {
+    if (!selectedServiceDefinition) {
       return 0;
     }
 
-    return calculateProgressivePrice(
-      quantity,
-      selectedServiceDefinition.name,
-      selectedServiceDefinition.priceRanges
-    );
-  }, [quantity, selectedService, selectedServiceDefinition, calculateProgressivePrice]);
+    // User feedback: "Atraso" follows standard table (volume discount), only "Reclamacao" is progressive
+    const useProgressivePricing = selectedServiceDefinition.name.toLowerCase().includes("reclamacao");
+
+    if (useProgressivePricing) {
+      const ranges = selectedServiceDefinition.priceRanges
+        .filter((range) => range.saleType === saleType)
+        .sort((a, b) => a.minQuantity - b.minQuantity);
+
+      if (ranges.length === 0) return 0;
+
+      let calculatedTotal = 0;
+
+      // Calculate progressive cost using intersection logic
+      for (const range of ranges) {
+          const rangeMax = range.maxQuantity ?? Infinity;
+          const rangeMin = range.minQuantity;
+          
+          const overlapStart = Math.max(1, rangeMin);
+          const overlapEnd = Math.min(quantity, rangeMax);
+          
+          const itemsInThisRange = Math.max(0, overlapEnd - overlapStart + 1);
+          
+          calculatedTotal += itemsInThisRange * range.unitPrice;
+      }
+
+      return calculatedTotal;
+    }
+
+    // Standard calculation for other services (including Atraso)
+    if (!applicablePriceRange) {
+      return 0;
+    }
+
+    return quantity * applicablePriceRange.unitPrice;
+  }, [applicablePriceRange, quantity, selectedServiceDefinition, saleType]);
 
   const generalDiscountAmount = useMemo(() => {
     if (!formData.generalDiscountValue || subtotal <= 0) {
@@ -481,17 +480,13 @@ export default function NewSalePage() {
       return null;
     }
 
-    const isReclamacao = selectedServiceDefinition.name.toLowerCase().includes("reclamacao");
-    const filteredRanges = selectedServiceDefinition.priceRanges.filter(
-      (r) => r.saleType === saleType
-    );
-
+    const isProgressive = selectedServiceDefinition.name.toLowerCase().includes("reclamacao");
     return (
       <div className="md:col-span-2 rounded-2xl border border-white/10 bg-black/20 p-4 space-y-3">
         <p className="text-xs uppercase text-gray-400">Faixas cadastradas</p>
-        {isReclamacao && (
+        {isProgressive && applicablePriceRange && (
           <div className="px-3 py-2 bg-blue-500/10 border border-blue-500/30 rounded-lg text-blue-300 text-xs">
-            <strong>Cálculo progressivo:</strong> As primeiras {filteredRanges[0]?.maxQuantity || 10} unidades sempre valem R$ {filteredRanges[0]?.unitPrice.toFixed(2) || "40,00"} cada. A partir da {(filteredRanges[0]?.maxQuantity || 10) + 1}ª unidade, cada uma vale R$ {filteredRanges[1]?.unitPrice.toFixed(2) || "15,00"}.
+            <strong>Calculo progressivo:</strong> O valor total e calculado somando o custo de cada faixa atingida.
           </div>
         )}
         <div className="space-y-1 text-sm text-gray-200">
@@ -501,7 +496,7 @@ export default function NewSalePage() {
               className="flex flex-col sm:flex-row sm:items-center justify-between gap-2"
             >
               <span>
-                {saleTypeLabels[range.saleType]} ·{" "}
+                {saleTypeLabels[range.saleType]} -{" "}
                 {formatQuantityRange(range.minQuantity, range.maxQuantity)}
               </span>
               <div className="flex items-center gap-3 text-xs text-gray-400">
@@ -568,43 +563,39 @@ export default function NewSalePage() {
                 className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-300">
                 Cliente *
               </label>
-              <select
+              <input
+                type="text"
+                placeholder="Buscar cliente..."
+                value={clientSearch}
+                onChange={(event) => setClientSearch(event.target.value)}
+                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-2.5 text-white placeholder-gray-400 focus:border-white focus:outline-none"
+              />
+              <Select
                 name="clientId"
                 value={formData.clientId}
                 onChange={handleChange}
                 required
-                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none"
-              >
-                <option value="" disabled>
-                  Selecione um cliente
-                </option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.name}
-                  </option>
-                ))}
-              </select>
+                options={filteredClients.map((client) => ({
+                  value: client.id,
+                  label: client.name
+                }))}
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Forma de pagamento *
-              </label>
-              <select
+              <Select
+                label="Forma de pagamento *"
                 name="paymentMethod"
                 value={formData.paymentMethod}
                 onChange={handleChange}
-                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none"
-              >
-                {Object.entries(paymentMethodLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                options={Object.entries(paymentMethodLabels).map(([value, label]) => ({
+                  value,
+                  label
+                }))}
+              />
             </div>
           </div>
         </div>
@@ -613,63 +604,39 @@ export default function NewSalePage() {
           <h2 className="text-xl font-semibold mb-4">Servico</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Servico *
-              </label>
-              <select
+              <Select
+                label="Servico *"
                 value={selectedService}
-                onChange={(event) => {
+                onChange={(event: any) => {
                   setSelectedService(event.target.value);
                   setSaleType("01");
                 }}
                 required
                 disabled={availableServices.length === 0}
-                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <option value="" disabled>
-                  {availableServices.length === 0
-                    ? "Nenhum servico disponivel"
-                    : "Selecione um servico"}
-                </option>
-                {availableServices.map((service) => (
-                  <option key={service.id} value={service.id}>
-                    {service.name}
-                  </option>
-                ))}
-              </select>
+                options={availableServices.map((service) => ({
+                  value: service.id,
+                  label: service.name
+                }))}
+              />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Tipo de venda *
-              </label>
-              <select
+              <Select
+                label="Tipo de venda *"
                 value={saleType}
-                onChange={(event) =>
+                onChange={(event: any) =>
                   setSaleType(event.target.value as SaleType)
                 }
                 disabled={
                   !selectedServiceDefinition ||
                   selectedServiceDefinition.priceRanges.length === 0
                 }
-                className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {saleTypeOptions.map((option) => {
-                  const disabledOption =
-                    !!selectedServiceDefinition &&
-                    !selectedServiceDefinition.priceRanges.some(
-                      (range) => range.saleType === option.value,
-                    );
-                  return (
-                    <option
-                      key={option.value}
-                      value={option.value}
-                      disabled={disabledOption}
-                    >
-                      {option.label}
-                    </option>
+                options={saleTypeOptions.filter((option) => {
+                  if (!selectedServiceDefinition) return true;
+                  return selectedServiceDefinition.priceRanges.some(
+                    (range) => range.saleType === option.value,
                   );
                 })}
-              </select>
+              />
               {!selectedServiceDefinition && (
                 <p className="text-xs text-gray-400 mt-1">
                   Selecione um servico para escolher o tipo de venda.
@@ -753,60 +720,32 @@ export default function NewSalePage() {
               <span>Quantidade</span>
               <span>{formatQuantity(quantity)}</span>
             </div>
-            {selectedServiceDefinition?.name.toLowerCase().includes("reclamacao") && quantity > 0 && (
-              <div className="px-3 py-2 bg-white/5 rounded-lg border border-white/10">
-                <p className="text-xs text-gray-400 mb-1">Detalhamento (cálculo progressivo):</p>
-                <div className="space-y-1 text-xs">
-                  {(() => {
-                    const ranges = selectedServiceDefinition.priceRanges
-                      .filter((r) => r.saleType === saleType)
-                      .sort((a, b) => a.minQuantity - b.minQuantity);
-                    const details = [];
-
-                    if (quantity <= 10) {
-                      details.push(
-                        <div key="range1" className="flex justify-between text-gray-300">
-                          <span>{quantity} × {currencyFormatter.format(ranges[0]?.unitPrice || 40)}</span>
-                          <span>{currencyFormatter.format(quantity * (ranges[0]?.unitPrice || 40))}</span>
-                        </div>
-                      );
-                    } else {
-                      const firstRangeQty = 10;
-                      const secondRangeQty = quantity - 10;
-                      details.push(
-                        <div key="range1" className="flex justify-between text-gray-300">
-                          <span>{firstRangeQty} × {currencyFormatter.format(ranges[0]?.unitPrice || 40)}</span>
-                          <span>{currencyFormatter.format(firstRangeQty * (ranges[0]?.unitPrice || 40))}</span>
-                        </div>,
-                        <div key="range2" className="flex justify-between text-gray-300">
-                          <span>{secondRangeQty} × {currencyFormatter.format(ranges[1]?.unitPrice || 15)}</span>
-                          <span>{currencyFormatter.format(secondRangeQty * (ranges[1]?.unitPrice || 15))}</span>
-                        </div>
-                      );
-                    }
-
-                    return details;
-                  })()}
+            {selectedService && (
+              <>
+                <div className="flex justify-between text-sm text-gray-300">
+                  <span>Subtotal:</span>
+                  <span>{currencyFormatter.format(subtotal)}</span>
                 </div>
-              </div>
-            )}
-            <div className="flex justify-between text-gray-300">
-              <span>Subtotal</span>
-              <span className="font-semibold">
-                {currencyFormatter.format(subtotal)}
-              </span>
-            </div>
-            {generalDiscountAmount > 0 && (
-              <div className="flex justify-between text-rose-300">
-                <span>
-                  Desconto (
-                  {formData.generalDiscountType === "percentage"
-                    ? `${formData.generalDiscountValue}%`
-                    : currencyFormatter.format(formData.generalDiscountValue)}
-                  )
-                </span>
-                <span>-{currencyFormatter.format(generalDiscountAmount)}</span>
-              </div>
+                {formData.generalDiscountValue > 0 && (
+                  <div className="flex justify-between text-sm text-gray-300">
+                    <span>
+                      Desconto (
+                      {formData.generalDiscountType === "percentage"
+                        ? `${formData.generalDiscountValue}%`
+                        : currencyFormatter.format(formData.generalDiscountValue)}
+                      ):
+                    </span>
+                    <span className="text-rose-300">
+                      -
+                      {currencyFormatter.format(
+                        formData.generalDiscountType === "percentage"
+                          ? (subtotal * formData.generalDiscountValue) / 100
+                          : formData.generalDiscountValue
+                      )}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
             <div className="pt-3 border-t border-white/10">
               <div className="flex justify-between items-center text-2xl font-bold">

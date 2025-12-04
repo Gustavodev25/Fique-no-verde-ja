@@ -8,7 +8,22 @@ const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { firstName, lastName, email, phone, password } = body;
+    const { firstName, lastName, email, phone, password, inviteCode } = body;
+
+    const allowedCodesRaw =
+      process.env.ALLOWED_SIGNUP_CODES || process.env.NEXT_ALLOWED_SIGNUP_CODES || "";
+    const allowedCodes = allowedCodesRaw
+      .split(",")
+      .map((code) => code.trim())
+      .filter(Boolean);
+    const codesRequired = allowedCodes.length > 0;
+
+    if (codesRequired && (!inviteCode || !allowedCodes.includes(inviteCode))) {
+      return NextResponse.json(
+        { error: "Convite invalido ou expirado" },
+        { status: 403 }
+      );
+    }
 
     // Validação dos campos obrigatórios
     if (!firstName || !lastName || !email || !phone || !password) {

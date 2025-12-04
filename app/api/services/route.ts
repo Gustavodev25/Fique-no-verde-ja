@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { query } from "@/lib/db";
+import { supabaseAdmin, query } from "@/lib/db";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this";
 
@@ -72,12 +72,13 @@ const authenticateUser = async (request: NextRequest) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as DecodedToken;
-    const result = await query(
-      `SELECT id, first_name, last_name, email, is_admin FROM users WHERE id = $1`,
-      [decoded.userId],
-    );
-    const user = result.rows[0];
-    if (!user) {
+    const { data: user, error } = await supabaseAdmin
+      .from("users")
+      .select("id, first_name, last_name, email, is_admin")
+      .eq("id", decoded.userId)
+      .single();
+
+    if (error || !user) {
       throw new Error("Usuario nao encontrado");
     }
     return user;
@@ -199,7 +200,7 @@ const validateRangesPayload = (ranges: unknown) => {
   }
 
   return ranges.map((item) => {
-    const saleType = item?.saleType === "02" ? "02" : "01";
+    const saleType: "01" | "02" = item?.saleType === "02" ? "02" : "01";
     const minQuantity = Number(item?.minQuantity ?? item?.minQty ?? 0);
     const maxValue = item?.maxQuantity ?? item?.maxQty;
     const maxQuantity =
@@ -256,7 +257,7 @@ export async function GET(request: NextRequest) {
     );
 
     const serviceRows = services.rows.map(mapServiceRow);
-    const serviceIds = serviceRows.map((service) => service.id);
+    const serviceIds = serviceRows.map((service: any) => service.id);
 
     const rangesMap = new Map<string, ServiceRangeResponse[]>();
 
@@ -279,7 +280,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       {
-        services: serviceRows.map((service) => ({
+        services: serviceRows.map((service: any) => ({
           ...service,
           priceRanges: rangesMap.get(service.id) ?? [],
         })),

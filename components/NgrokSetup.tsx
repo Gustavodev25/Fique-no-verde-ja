@@ -3,30 +3,36 @@
 import { useEffect } from "react";
 
 /**
- * Componente que configura o fetch global para incluir headers necessários para ngrok
+ * Ajusta o fetch global para adicionar o header do ngrok sem interferir em uploads.
  */
 export default function NgrokSetup() {
   useEffect(() => {
-    // Configurar fetch global para incluir headers ngrok
     const originalFetch = window.fetch;
 
     window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
-      const headers = new Headers(init?.headers);
+      try {
+        const baseHeaders =
+          input instanceof Request ? input.headers : undefined;
+        const headers = new Headers(baseHeaders);
 
-      // Adicionar header para pular tela de aviso do ngrok
-      headers.set('ngrok-skip-browser-warning', 'true');
+        if (init?.headers) {
+          new Headers(init.headers).forEach((value, key) => {
+            headers.set(key, value);
+          });
+        }
 
-      // Adicionar User-Agent customizado como fallback
-      headers.set('User-Agent', 'fqnj-app');
+        headers.set("ngrok-skip-browser-warning", "true");
 
-      return originalFetch(input, {
-        ...init,
-        headers,
-      });
+        return originalFetch(input, {
+          ...init,
+          headers,
+        });
+      } catch (err) {
+        console.warn("Fallback para fetch original (NgrokSetup)", err);
+        return originalFetch(input, init);
+      }
     };
-
-    // Cleanup não é necessário pois queremos manter essa configuração
   }, []);
 
-  return null; // Este componente não renderiza nada
+  return null;
 }

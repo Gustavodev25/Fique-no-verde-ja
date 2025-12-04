@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useToast } from "@/components/Toast";
 import Card from "@/components/Card";
+import { Select } from "@/components/Select";
 
 type PeriodTotals = {
   salesCount: number;
@@ -10,6 +11,9 @@ type PeriodTotals = {
   totalUnits: number;
   reclamacoesUnits: number;
   atrasosUnits: number;
+  totalCommission: number;
+  totalDiscount: number;
+  refundTotal: number;
 };
 
 type DashboardMetrics = {
@@ -119,6 +123,8 @@ export default function Dashboard() {
   const [analysisPeriod, setAnalysisPeriod] = useState("30");
   const [services, setServices] = useState<ServiceOption[]>([]);
   const [selectedService, setSelectedService] = useState("");
+  const [attendants, setAttendants] = useState<Array<{ value: string; label: string }>>([]);
+  const [attendantFilter, setAttendantFilter] = useState("");
   const [customRangeDraft, setCustomRangeDraft] = useState({
     start: "",
     end: "",
@@ -152,11 +158,18 @@ export default function Dashboard() {
       });
 
       const data = (await response.json()) as {
+        user: {
+          id: string;
+          first_name: string;
+          last_name: string;
+          email: string;
+          is_admin: boolean;
+        };
         services?: Array<{ id: string; name: string }>;
       };
 
       if (!response.ok) {
-        throw new Error(data.error || "Não foi possível carregar o usuário");
+        throw new Error((data as any).error || "Não foi possível carregar o usuário");
       }
 
       setCurrentUser({
@@ -194,7 +207,7 @@ export default function Dashboard() {
       }
 
       const mapped: ServiceOption[] =
-        (data.services ?? []).map((service) => ({
+        (data.services ?? []).map((service: any) => ({
           id: service.id,
           name: service.name,
           label: formatServiceLabel(service.name),
@@ -205,6 +218,28 @@ export default function Dashboard() {
       console.error("Erro ao carregar serviços:", err);
     }
   }, []);
+
+  const fetchAttendants = useCallback(async () => {
+    if (!currentUser?.isAdmin) return;
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    try {
+      const res = await fetch("/api/admin/users", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.users)) {
+        setAttendants(
+          data.users.map((u: any) => ({
+            value: u.id,
+            label: `${u.first_name} ${u.last_name}`.trim() || u.email,
+          }))
+        );
+      }
+    } catch {
+      // silencioso
+    }
+  }, [currentUser?.isAdmin]);
 
   // Carregar métricas do dashboard
   const fetchDashboardMetrics = useCallback(async () => {
@@ -231,6 +266,9 @@ export default function Dashboard() {
       if (selectedService) {
         params.set("serviceName", selectedService);
       }
+      if (currentUser?.isAdmin && attendantFilter) {
+        params.set("attendantId", attendantFilter);
+      }
 
       const response = await fetch(`/api/dashboard/metrics?${params.toString()}`, {
         headers: {
@@ -251,7 +289,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [analysisPeriod, appliedCustomRange, selectedService, error]);
+  }, [analysisPeriod, appliedCustomRange, selectedService, attendantFilter, error, currentUser?.isAdmin]);
 
   const handleSelectPeriod = (value: string) => {
     setAnalysisPeriod(value);
@@ -285,8 +323,9 @@ export default function Dashboard() {
   useEffect(() => {
     if (currentUser) {
       fetchServices();
+      fetchAttendants();
     }
-  }, [currentUser, fetchServices]);
+  }, [currentUser, fetchServices, fetchAttendants]);
 
   useEffect(() => {
     if (currentUser) {
@@ -295,15 +334,16 @@ export default function Dashboard() {
   }, [currentUser, fetchDashboardMetrics]);
 
   const periodTotals = metrics?.periodTotals;
+  const refundTotal = periodTotals?.refundTotal ?? 0;
   const analysisRange = metrics?.analysisRange;
   const analysisPeriodDays =
     metrics?.analysisPeriodDays ??
     (analysisPeriod === "custom" && appliedCustomRange
       ? Math.floor(
-          (Date.parse(appliedCustomRange.end) -
-            Date.parse(appliedCustomRange.start)) /
-            (1000 * 60 * 60 * 24),
-        ) + 1
+        (Date.parse(appliedCustomRange.end) -
+          Date.parse(appliedCustomRange.start)) /
+        (1000 * 60 * 60 * 24),
+      ) + 1
       : Number(analysisPeriod));
   const servicePerformanceData = (metrics?.servicePerformance ?? []).map(
     (service) => ({
@@ -561,17 +601,17 @@ export default function Dashboard() {
               Olá, {currentUser?.firstName}! 👋
             </h1>
             <p className="text-sm text-gray-400">
-                {analysisRange
-                  ? `Período: ${formatDate(analysisRange.startDate)} - ${formatDate(
-                      analysisRange.endDate,
-                    )}`
-                  : `Últimos ${analysisPeriodDays} dias`}{" "}
-                · Serviço:{" "}
-                <span className="font-semibold text-white">
-                  {selectedServiceLabel}
-                </span>
-              </p>
-            </div>
+              {analysisRange
+                ? `Período: ${formatDate(analysisRange.startDate)} - ${formatDate(
+                  analysisRange.endDate,
+                )}`
+                : `Últimos ${analysisPeriodDays} dias`}{" "}
+              · Serviço:{" "}
+              <span className="font-semibold text-white">
+                {selectedServiceLabel}
+              </span>
+            </p>
+          </div>
 
           {/* Filtros Compactos */}
           <div className="space-y-3">
@@ -582,11 +622,10 @@ export default function Dashboard() {
                 <button
                   key={option.value}
                   onClick={() => handleSelectPeriod(option.value)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
-                    analysisPeriod === option.value
-                      ? "bg-white text-black"
-                      : "bg-white/10 text-white hover:bg-white/20"
-                  }`}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition-all ${analysisPeriod === option.value
+                    ? "bg-white text-black"
+                    : "bg-white/10 text-white hover:bg-white/20"
+                    }`}
                 >
                   {option.label}
                 </button>
@@ -595,19 +634,80 @@ export default function Dashboard() {
               {/* Separador */}
               <div className="h-6 w-px bg-white/20"></div>
 
+              {/* Filtros rápidos: Hoje / Ontem */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const today = new Date();
+                    const start = today.toISOString().slice(0, 10);
+                    const end = today.toISOString().slice(0, 10);
+                    setCustomRangeDraft({ start, end });
+                    setAppliedCustomRange({ start, end });
+                    setAnalysisPeriod("custom");
+                  }}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                    appliedCustomRange &&
+                    appliedCustomRange.start === appliedCustomRange.end &&
+                    appliedCustomRange.start === new Date().toISOString().slice(0, 10)
+                      ? "bg-white/20 text-white border border-white/30"
+                      : "bg-white/5 text-gray-200 border border-white/10 hover:bg-white/10"
+                  }`}
+                >
+                  Hoje
+                </button>
+                <button
+                  onClick={() => {
+                    const today = new Date();
+                    const yesterday = new Date(today);
+                    yesterday.setDate(today.getDate() - 1);
+                    const start = yesterday.toISOString().slice(0, 10);
+                    const end = yesterday.toISOString().slice(0, 10);
+                    setCustomRangeDraft({ start, end });
+                    setAppliedCustomRange({ start, end });
+                    setAnalysisPeriod("custom");
+                  }}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                    appliedCustomRange &&
+                    appliedCustomRange.start === appliedCustomRange.end &&
+                    appliedCustomRange.start ===
+                      new Date(Date.now() - 24 * 60 * 60 * 1000)
+                        .toISOString()
+                        .slice(0, 10)
+                      ? "bg-white/20 text-white border border-white/30"
+                      : "bg-white/5 text-gray-200 border border-white/10 hover:bg-white/10"
+                  }`}
+                >
+                  Ontem
+                </button>
+              </div>
+
               {/* Filtro de Serviço */}
-              <select
-                value={selectedService}
-                onChange={(e) => setSelectedService(e.target.value)}
-                className="rounded-lg border border-white/20 bg-black/30 px-3 py-1.5 text-xs text-white focus:border-white focus:outline-none min-w-[180px]"
-              >
-                <option value="">Todos os serviços</option>
-                {services.map((service) => (
-                  <option key={service.id} value={service.name}>
-                    {service.label}
-                  </option>
-                ))}
-              </select>
+              <div className="min-w-[180px]">
+                <Select
+                  value={selectedService}
+                  onChange={(e: any) => setSelectedService(e.target.value)}
+                  options={[
+                    { value: "", label: "Todos os serviços" },
+                    ...services.map((service) => ({
+                      value: service.name,
+                      label: service.label
+                    }))
+                  ]}
+                  className="rounded-lg border border-white/20 bg-black/30 px-3 py-1.5 text-xs"
+                />
+              </div>
+
+              {/* Filtro de Atendente (admin) */}
+              {currentUser?.isAdmin && attendants.length > 0 && (
+                <div className="min-w-[200px]">
+                  <Select
+                    value={attendantFilter}
+                    onChange={(e: any) => setAttendantFilter(e.target.value)}
+                    options={[{ value: "", label: "Todos os atendentes" }, ...attendants]}
+                    className="rounded-lg border border-white/20 bg-black/30 px-3 py-1.5 text-xs"
+                  />
+                </div>
+              )}
 
               {/* Separador */}
               <div className="h-6 w-px bg-white/20"></div>
@@ -638,25 +738,25 @@ export default function Dashboard() {
                   value={customRangeDraft.start}
                   onChange={(e) =>
                     setCustomRangeDraft((prev) => ({
-                        ...prev,
-                        start: e.target.value,
-                      }))
-                    }
-                    placeholder="Data inicial"
-                    className="rounded-lg border border-white/20 bg-black/30 px-3 py-1.5 text-xs text-white placeholder:text-gray-500 focus:border-white focus:outline-none"
-                  />
-                  <span className="text-xs text-gray-500">até</span>
-                  <input
-                    type="date"
-                    value={customRangeDraft.end}
-                    onChange={(e) =>
-                      setCustomRangeDraft((prev) => ({
-                        ...prev,
-                        end: e.target.value,
-                      }))
-                    }
-                    placeholder="Data final"
-                    className="rounded-lg border border-white/20 bg-black/30 px-3 py-1.5 text-xs text-white placeholder:text-gray-500 focus:border-white focus:outline-none"
+                      ...prev,
+                      start: e.target.value,
+                    }))
+                  }
+                  placeholder="Data inicial"
+                  className="rounded-lg border border-white/20 bg-black/30 px-3 py-1.5 text-xs text-white placeholder:text-gray-500 focus:border-white focus:outline-none"
+                />
+                <span className="text-xs text-gray-500">até</span>
+                <input
+                  type="date"
+                  value={customRangeDraft.end}
+                  onChange={(e) =>
+                    setCustomRangeDraft((prev) => ({
+                      ...prev,
+                      end: e.target.value,
+                    }))
+                  }
+                  placeholder="Data final"
+                  className="rounded-lg border border-white/20 bg-black/30 px-3 py-1.5 text-xs text-white placeholder:text-gray-500 focus:border-white focus:outline-none"
                 />
                 <button
                   onClick={handleApplyCustomRange}
@@ -683,11 +783,108 @@ export default function Dashboard() {
         </div>
 
         {/* Cards de Métricas Principais */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+          {/* FATURAMENTO BRUTO */}
+          <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-500/20">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400 mb-1">Faturamento Bruto</p>
+                <p className="text-3xl font-bold text-white">
+                  {formatCurrency(periodTotals?.totalValue ?? 0)}
+                </p>
+                <p className="text-sm text-emerald-300 mt-1">{periodDescription}</p>
+              </div>
+              <div className="w-14 h-14 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                <svg
+                  className="w-8 h-8 text-emerald-300"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+          </Card>
+
+          {/* DESCONTOS + ESTORNOS */}
+          <Card className="bg-gradient-to-br from-red-500/10 to-amber-500/10 border-red-500/20">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400 mb-1">Descontos + Estornos</p>
+                <p className="text-3xl font-bold text-white">
+                  {formatCurrency((periodTotals?.totalDiscount ?? 0) + refundTotal)}
+                </p>
+                <p className="text-sm text-red-200 mt-1">{periodDescription}</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Descontos: {formatCurrency(periodTotals?.totalDiscount ?? 0)} • Estornos: {formatCurrency(refundTotal)}
+                </p>
+              </div>
+              <div className="w-14 h-14 rounded-full bg-red-500/20 flex items-center justify-center">
+                <svg
+                  className="w-8 h-8 text-red-300"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 7h10v10" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 17L17 7" />
+                </svg>
+              </div>
+            </div>
+          </Card>
+
+          {/* FATURAMENTO LÍQUIDO */}
+          <Card className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400 mb-1">Faturamento Líquido</p>
+                <p className="text-3xl font-bold text-white">
+                  {formatCurrency((periodTotals?.totalValue ?? 0) - (periodTotals?.totalDiscount ?? 0) - refundTotal)}
+                </p>
+                <p className="text-sm text-green-300 mt-1">{periodDescription}</p>
+              </div>
+              <div className="w-14 h-14 rounded-full bg-green-500/20 flex items-center justify-center">
+                <svg
+                  className="w-8 h-8 text-green-300"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+          </Card>
+
+          {/* COMISSÕES */}
+          <Card className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 border-purple-500/20">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400 mb-1">Comissões</p>
+                <p className="text-3xl font-bold text-white">
+                  {formatCurrency(periodTotals?.totalCommission ?? 0)}
+                </p>
+                <p className="text-sm text-purple-300 mt-1">{periodDescription}</p>
+              </div>
+              <div className="w-14 h-14 rounded-full bg-purple-500/20 flex items-center justify-center">
+                <svg
+                  className="w-8 h-8 text-purple-300"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+              </div>
+            </div>
+          </Card>
+
+          {/* VENDAS */}
           <Card className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-400 mb-1">Vendas no período</p>
+                <p className="text-sm text-gray-400 mb-1">Vendas</p>
                 <p className="text-3xl font-bold text-white">
                   {periodTotals?.salesCount ?? 0}
                 </p>
@@ -700,89 +897,33 @@ export default function Dashboard() {
                   stroke="currentColor"
                   viewBox="0 0 24 24"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 19h16" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 19V9" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 19V5" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 19v-7" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
                 </svg>
               </div>
             </div>
           </Card>
 
-          <Card className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20">
+          {/* RECLAMAÇÕES & ATRASOS - CARD UNIFICADO */}
+          <Card className="bg-gradient-to-br from-orange-500/10 to-amber-600/5 border-orange-500/20">
             <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-400 mb-1">
-                  Faturamento no período
-                </p>
-                <p className="text-3xl font-bold text-white">
-                  {formatCurrency(periodTotals?.totalValue ?? 0)}
-                </p>
-                <p className="text-sm text-green-300 mt-1">{periodDescription}</p>
-              </div>
-              <div className="w-14 h-14 rounded-full bg-green-500/20 flex items-center justify-center">
-                <svg
-                  className="w-8 h-8 text-green-300"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 8h16v8H4z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v8" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 12h8" />
-                </svg>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 border-purple-500/20">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-400 mb-1">
-                  Unidades — Reclamações
-                </p>
-                <p className="text-3xl font-bold text-white">
-                  {periodTotals?.reclamacoesUnits ?? 0}
-                </p>
-                <p className="text-sm text-purple-300 mt-1">
-                  {periodTotals ? `${periodTotals.totalUnits} unidades totais` : "Sem dados"}
-                </p>
-              </div>
-              <div className="w-14 h-14 rounded-full bg-purple-500/20 flex items-center justify-center">
-                <svg
-                  className="w-8 h-8 text-purple-300"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M3 7l9 5 9-5"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M3 7v10l9 5 9-5V7"
-                  />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 12v10" />
-                </svg>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="bg-gradient-to-br from-orange-500/10 to-orange-600/5 border-orange-500/20">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-400 mb-1">
-                  Unidades — Atrasos
-                </p>
-                <p className="text-3xl font-bold text-white">
-                  {periodTotals?.atrasosUnits ?? 0}
-                </p>
-                <p className="text-sm text-orange-300 mt-1">{periodDescription}</p>
+              <div className="flex-1">
+                <p className="text-sm text-gray-400 mb-2">Reclamações & Atrasos</p>
+                <div className="flex items-center gap-4">
+                  <div>
+                    <p className="text-2xl font-bold text-orange-300">
+                      {periodTotals?.reclamacoesUnits ?? 0}
+                    </p>
+                    <p className="text-xs text-gray-400">Reclamações</p>
+                  </div>
+                  <div className="h-10 w-px bg-white/20"></div>
+                  <div>
+                    <p className="text-2xl font-bold text-amber-300">
+                      {periodTotals?.atrasosUnits ?? 0}
+                    </p>
+                    <p className="text-xs text-gray-400">Atrasos</p>
+                  </div>
+                </div>
+                <p className="text-sm text-orange-300 mt-2">{periodDescription}</p>
               </div>
               <div className="w-14 h-14 rounded-full bg-orange-500/20 flex items-center justify-center">
                 <svg
@@ -791,91 +932,14 @@ export default function Dashboard() {
                   stroke="currentColor"
                   viewBox="0 0 24 24"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M12 8v4l2.5 2.5"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M12 4a8 8 0 100 16 8 8 0 000-16z"
-                  />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
             </div>
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <Card className="bg-white/5 border border-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-400 mb-1">Pacotes ativos</p>
-                <p className="text-3xl font-bold text-white">
-                  {metrics?.activePackages ?? 0}
-                </p>
-                <p className="text-sm text-gray-400 mt-1">com saldo disponível</p>
-              </div>
-              <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-                <svg
-                  className="w-7 h-7 text-white/80"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M3 7l9 5 9-5"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M3 7v10l9 5 9-5V7"
-                  />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 12v10" />
-                </svg>
-              </div>
-            </div>
-          </Card>
-          <Card className="bg-white/5 border border-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-400 mb-1">Vendas abertas</p>
-                <p className="text-3xl font-bold text-white">
-                  {metrics?.pendingSales ?? 0}
-                </p>
-                <p className="text-sm text-gray-400 mt-1">aguardando confirmação</p>
-              </div>
-              <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-                <svg
-                  className="w-7 h-7 text-white/80"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M12 8v4l2.5 2.5"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M12 4a8 8 0 100 16 8 8 0 000-16z"
-                  />
-                </svg>
-              </div>
-            </div>
-          </Card>
-        </div>
+
 
         {/* Performance Avançada */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-8">
@@ -1050,17 +1114,6 @@ export default function Dashboard() {
                     <div className="text-right">
                       <p className="text-white font-semibold">
                         {formatCurrency(sale.total)}
-                      </p>
-                      <p
-                        className={`text-xs ${
-                          sale.status === "confirmada"
-                            ? "text-green-400"
-                            : sale.status === "aberta"
-                            ? "text-blue-400"
-                            : "text-red-400"
-                        }`}
-                      >
-                        {sale.status}
                       </p>
                     </div>
                   </div>

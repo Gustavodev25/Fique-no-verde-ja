@@ -59,41 +59,82 @@ const authenticateUser = async (request: NextRequest): Promise<AuthenticatedUser
 // GET - Obter detalhes de uma venda específica com seus itens
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  props: { params: Promise<{ id: string }> }
 ) {
   try {
+    const params = await props.params;
     const user = await authenticateUser(request);
     const saleId = params.id;
 
-    // Buscar venda
-    const saleResult = await query(
-      `SELECT
-        s.id,
-        s.client_id,
-        s.attendant_id,
-        s.sale_date,
-        s.observations,
-        s.status,
-        s.payment_method,
-        s.general_discount_type,
-        s.general_discount_value,
-        s.subtotal,
-        s.total_discount,
-        s.total,
-        s.confirmed_at,
-        s.cancelled_at,
-        s.created_at,
-        s.updated_at,
-        c.name as client_name,
-        c.phone as client_phone,
-        c.email as client_email,
-        u.first_name || ' ' || u.last_name as attendant_name
-       FROM sales s
-       JOIN clients c ON s.client_id = c.id
-       JOIN users u ON s.attendant_id = u.id
-       WHERE s.id = $1`,
-      [saleId]
-    );
+    // Buscar venda (com fallback se o schema ainda nao tiver refund_total)
+    let hasRefundSupport = true;
+    let saleResult;
+    try {
+      saleResult = await query(
+        `SELECT
+          s.id,
+          s.client_id,
+          s.attendant_id,
+          s.sale_date,
+          s.observations,
+          s.status,
+          s.payment_method,
+          s.general_discount_type,
+          s.general_discount_value,
+          s.subtotal,
+          s.total_discount,
+          s.total,
+          s.refund_total,
+          s.confirmed_at,
+          s.cancelled_at,
+          s.created_at,
+          s.updated_at,
+          c.name as client_name,
+          c.phone as client_phone,
+          c.email as client_email,
+          u.first_name || ' ' || u.last_name as attendant_name
+         FROM sales s
+         JOIN clients c ON s.client_id = c.id
+         JOIN users u ON s.attendant_id = u.id
+         WHERE s.id = $1`,
+        [saleId]
+      );
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg.includes("refund_total") || msg.includes("sale_refunds")) {
+        hasRefundSupport = false;
+        saleResult = await query(
+          `SELECT
+            s.id,
+            s.client_id,
+            s.attendant_id,
+            s.sale_date,
+            s.observations,
+            s.status,
+            s.payment_method,
+            s.general_discount_type,
+            s.general_discount_value,
+            s.subtotal,
+            s.total_discount,
+            s.total,
+            s.confirmed_at,
+            s.cancelled_at,
+            s.created_at,
+            s.updated_at,
+            c.name as client_name,
+            c.phone as client_phone,
+            c.email as client_email,
+            u.first_name || ' ' || u.last_name as attendant_name
+           FROM sales s
+           JOIN clients c ON s.client_id = c.id
+           JOIN users u ON s.attendant_id = u.id
+           WHERE s.id = $1`,
+          [saleId]
+        );
+      } else {
+        throw err;
+      }
+    }
 
     if (saleResult.rowCount === 0) {
       return NextResponse.json(
@@ -132,6 +173,32 @@ export async function GET(
       [saleId]
     );
 
+    let refundsResult: any = { rows: [] };
+    if (hasRefundSupport) {
+      try {
+        refundsResult = await query(
+          `SELECT
+            id,
+            amount,
+            reason,
+            created_by,
+            created_at
+           FROM sale_refunds
+           WHERE sale_id = $1
+           ORDER BY created_at DESC`,
+          [saleId]
+        );
+      } catch (err: any) {
+        const msg = err?.message || "";
+        if (msg.includes("sale_refunds")) {
+          hasRefundSupport = false;
+          refundsResult = { rows: [] };
+        } else {
+          throw err;
+        }
+      }
+    }
+
     // Formatar resposta
     const formattedSale = {
       id: sale.id,
@@ -150,11 +217,12 @@ export async function GET(
       subtotal: parseFloat(sale.subtotal),
       totalDiscount: parseFloat(sale.total_discount),
       total: parseFloat(sale.total),
+      refundTotal: hasRefundSupport ? parseFloat(sale.refund_total || 0) : 0,
       confirmedAt: sale.confirmed_at,
       cancelledAt: sale.cancelled_at,
       createdAt: sale.created_at,
       updatedAt: sale.updated_at,
-      items: itemsResult.rows.map((item) => ({
+      items: itemsResult.rows.map((item: any) => ({
         id: item.id,
         productId: item.product_id,
         productName: item.product_name,
@@ -167,6 +235,15 @@ export async function GET(
         total: parseFloat(item.total),
         createdAt: item.created_at,
       })),
+      refunds: hasRefundSupport
+        ? refundsResult.rows.map((ref: any) => ({
+            id: ref.id,
+            amount: parseFloat(ref.amount),
+            reason: ref.reason,
+            createdBy: ref.created_by,
+            createdAt: ref.created_at,
+          }))
+        : [],
     };
 
     return NextResponse.json({ sale: formattedSale }, { status: 200 });

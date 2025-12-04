@@ -1,8 +1,10 @@
 "use client";
 
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Button } from "@/components/Button";
+import { Select } from "@/components/Select";
 import { useToast } from "@/components/Toast";
 
 type Client = {
@@ -62,6 +64,9 @@ export default function AdminClientsPage() {
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const totalClientsCopy = useMemo(() => {
     if (clients.length === 0) {
@@ -312,6 +317,100 @@ export default function AdminClientsPage() {
     }
   };
 
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setSelectedFile(file);
+    }
+  };
+
+  const handleImportExcel = async () => {
+    if (!selectedFile) {
+      error("Selecione um arquivo Excel para importar");
+      return;
+    }
+
+    const token = localStorage.getItem("token");
+    if (!token) {
+      error("Sessao expirada. Faca login novamente.");
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+
+      const response = await fetch("/api/admin/clients/import", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        let errorMessage = data.error || "Erro ao importar clientes";
+        if (data.details && Array.isArray(data.details)) {
+          errorMessage += "\n\nDetalhes:\n" + data.details.join("\n");
+        }
+        throw new Error(errorMessage);
+      }
+
+      let successMessage = `${data.imported || 0} clientes importados com sucesso!`;
+      if (data.totalErrors && data.totalErrors > 0) {
+        successMessage += ` (${data.totalErrors} erro${data.totalErrors > 1 ? "s" : ""} encontrado${data.totalErrors > 1 ? "s" : ""})`;
+      }
+
+      success(successMessage);
+      setIsImportModalOpen(false);
+      setSelectedFile(null);
+      await fetchClients();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Erro ao importar clientes";
+      error(message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      error("Sessao expirada. Faca login novamente.");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/admin/clients/template", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Erro ao baixar modelo");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "modelo_importacao_clientes.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Erro ao baixar modelo";
+      error(message);
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
 
@@ -376,9 +475,19 @@ export default function AdminClientsPage() {
       <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between px-6 py-4 border-b border-white/10">
           <p className="text-sm text-gray-300">{totalClientsCopy}</p>
-          <Button size="sm" onClick={() => openModal()} className="rounded-xl">
-            Adicionar cliente
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setIsImportModalOpen(true)}
+              className="rounded-xl"
+            >
+              Importar Excel
+            </Button>
+            <Button size="sm" onClick={() => openModal()} className="rounded-xl">
+              Adicionar cliente
+            </Button>
+          </div>
         </div>
 
         {loading ? (
@@ -576,19 +685,15 @@ export default function AdminClientsPage() {
               className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white placeholder-gray-400 focus:border-white focus:outline-none"
             />
 
-            <select
+            <Select
               name="originId"
               value={formData.originId}
               onChange={handleChange}
-              className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white focus:border-white focus:outline-none"
-            >
-              <option value="">Selecione a origem</option>
-              {origins.map((origin) => (
-                <option key={origin.id} value={origin.id}>
-                  {origin.name}
-                </option>
-              ))}
-            </select>
+              options={origins.map((origin) => ({
+                value: origin.id,
+                label: origin.name
+              }))}
+            />
           </div>
         </form>
       </Modal>
@@ -699,6 +804,85 @@ export default function AdminClientsPage() {
             Esta acao nao pode ser desfeita.
           </p>
         )}
+      </Modal>
+
+      {/* Modal Importar Excel */}
+      <Modal
+        open={isImportModalOpen}
+        onClose={() => {
+          setIsImportModalOpen(false);
+          setSelectedFile(null);
+        }}
+        title="Importar clientes via Excel"
+        footer={
+          <div className="flex items-center justify-end gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-xl px-5"
+              onClick={() => {
+                setIsImportModalOpen(false);
+                setSelectedFile(null);
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              className="rounded-xl px-6"
+              disabled={importing || !selectedFile}
+              onClick={handleImportExcel}
+            >
+              {importing ? "Importando..." : "Importar"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30">
+            <p className="text-sm text-blue-200 mb-2">
+              Antes de importar, baixe o modelo do Excel para preencher corretamente os dados.
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="rounded-xl"
+              onClick={handleDownloadTemplate}
+            >
+              Baixar modelo do Excel
+            </Button>
+          </div>
+
+          <div>
+            <label className="block text-xs uppercase text-gray-400 mb-2">
+              Selecione o arquivo Excel
+            </label>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleFileChange}
+              className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-orange-500/20 file:text-orange-200 hover:file:bg-orange-500/30"
+            />
+            {selectedFile && (
+              <p className="text-sm text-gray-300 mt-2">
+                Arquivo selecionado: {selectedFile.name}
+              </p>
+            )}
+          </div>
+
+          <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+            <p className="text-xs uppercase text-gray-400 mb-2">
+              Informações importantes:
+            </p>
+            <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
+              <li>O arquivo deve estar no formato .xlsx ou .xls</li>
+              <li>Preencha todas as colunas obrigatórias do modelo</li>
+              <li>O nome do cliente é obrigatório</li>
+              <li>CPF/CNPJ e email devem ser únicos (se preenchidos)</li>
+              <li>Data de nascimento deve estar no formato DD/MM/AAAA</li>
+            </ul>
+          </div>
+        </div>
       </Modal>
     </div>
   );

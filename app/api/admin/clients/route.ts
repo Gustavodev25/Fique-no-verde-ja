@@ -8,10 +8,15 @@ type DecodedToken = {
   userId: string;
 };
 
+type ClientType = "common" | "package";
+
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phoneRegex = /^\(\d{2}\)\s\d{4,5}-\d{4}$/;
 const cpfRegex = /^\d{3}\.\d{3}\.\d{3}-\d{2}$/;
 const cnpjRegex = /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/;
+
+const isValidClientType = (value: string): value is ClientType =>
+  value === "common" || value === "package";
 
 const getTokenFromRequest = (request: NextRequest) => {
   const cookieToken = request.cookies.get("token")?.value;
@@ -147,7 +152,11 @@ const isValidCNPJ = (cnpj: string): boolean => {
 // GET - Listar todos os clientes
 export async function GET(request: NextRequest) {
   try {
-    await authenticateUser(request);
+    const user = await authenticateUser(request);
+
+    // Mostrar apenas clientes criados pelo usuário logado (escopo estrito por conta)
+    const whereClause = "WHERE c.created_by_user_id = $1";
+    const params = [user.id];
 
     const clients = await query(
       `SELECT
@@ -158,13 +167,18 @@ export async function GET(request: NextRequest) {
         c.email,
         c.cpf_cnpj,
         c.origin_id,
+        c.client_type,
+        c.responsible_name,
+        c.reference_contact,
         c.is_active,
         c.created_at,
         c.updated_at,
         co.name as origin_name
        FROM clients c
        LEFT JOIN client_origins co ON c.origin_id = co.id
-       ORDER BY c.created_at DESC`
+       ${whereClause}
+       ORDER BY c.created_at DESC`,
+      params
     );
 
     return NextResponse.json({ clients: clients.rows }, { status: 200 });
@@ -184,21 +198,65 @@ export async function POST(request: NextRequest) {
     const requestUser = await authenticateUser(request);
 
     const body = await request.json();
-    const { name, phone, birthDate, email, cpfCnpj, originId } = body;
+    const {
+      name,
+      phone,
+      birthDate,
+      email,
+      cpfCnpj,
+      originId,
+      clientType,
+      responsibleName,
+      referenceContact,
+    } = body;
 
     // Validações
-    if (!name || name.trim() === "") {
+    const normalizedName = name?.trim();
+    if (!normalizedName) {
       return NextResponse.json(
         { error: "Nome do cliente e obrigatorio" },
         { status: 400 }
       );
     }
 
-    if (email && !emailRegex.test(email)) {
+    if (clientType && !isValidClientType(clientType)) {
+      return NextResponse.json(
+        { error: "Tipo de cliente invalido. Use 'common' ou 'package'" },
+        { status: 400 }
+      );
+    }
+
+    const normalizedClientType: ClientType = isValidClientType(clientType)
+      ? clientType
+      : "common";
+
+    const normalizedResponsible = responsibleName?.trim() || null;
+    const normalizedReference = referenceContact?.trim() || null;
+
+    if (normalizedClientType === "package") {
+      if (!normalizedResponsible) {
+        return NextResponse.json(
+          { error: "Responsavel e obrigatorio para cliente de pacote" },
+          { status: 400 }
+        );
+      }
+      if (!normalizedReference) {
+        return NextResponse.json(
+          { error: "Contato de referencia e obrigatorio para cliente de pacote" },
+          { status: 400 }
+        );
+      }
+    }
+
+    const normalizedPhone = phone?.trim() || null;
+    const normalizedEmail = email?.trim() || null;
+    const normalizedCpfCnpj = cpfCnpj?.trim() || null;
+
+    if (normalizedEmail && !emailRegex.test(normalizedEmail)) {
       return NextResponse.json({ error: "Email invalido" }, { status: 400 });
     }
 
-    if (phone && !phoneRegex.test(phone)) {
+    if (normalizedPhone && !phoneRegex.test(normalizedPhone)) {
       return NextResponse.json(
         { error: "Telefone invalido. Use o formato (XX) XXXXX-XXXX" },
         { status: 400 }
@@ -206,9 +264,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Validar CPF/CNPJ
-    if (cpfCnpj) {
-      const isCPF = cpfRegex.test(cpfCnpj);
-      const isCNPJ = cnpjRegex.test(cpfCnpj);
+    if (normalizedCpfCnpj) {
+      const isCPF = cpfRegex.test(normalizedCpfCnpj);
+      const isCNPJ = cnpjRegex.test(normalizedCpfCnpj);
 
       if (!isCPF && !isCNPJ) {
         return NextResponse.json(
@@ -217,14 +275,14 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (isCPF && !isValidCPF(cpfCnpj)) {
+      if (isCPF && !isValidCPF(normalizedCpfCnpj)) {
         return NextResponse.json(
           { error: "CPF invalido" },
           { status: 400 }
         );
       }
 
-      if (isCNPJ && !isValidCNPJ(cpfCnpj)) {
+      if (isCNPJ && !isValidCNPJ(normalizedCpfCnpj)) {
         return NextResponse.json(
           { error: "CNPJ invalido" },
           { status: 400 }
@@ -234,7 +292,7 @@ export async function POST(request: NextRequest) {
       // Verificar se já existe um cliente com este CPF/CNPJ
       const existingClient = await query(
         "SELECT id FROM clients WHERE cpf_cnpj = $1",
-        [cpfCnpj]
+        [normalizedCpfCnpj]
       );
 
       if (existingClient.rows.length > 0) {
@@ -265,16 +323,30 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await query(
-      `INSERT INTO clients (name, phone, birth_date, email, cpf_cnpj, origin_id, created_by_user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, phone, birth_date, email, cpf_cnpj, origin_id, is_active, created_at`,
+      `INSERT INTO clients (
+        name,
+        phone,
+        birth_date,
+        email,
+        cpf_cnpj,
+        origin_id,
+        client_type,
+        responsible_name,
+        reference_contact,
+        created_by_user_id
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, name, phone, birth_date, email, cpf_cnpj, origin_id, client_type, responsible_name, reference_contact, is_active, created_at`,
       [
-        name.trim(),
-        phone || null,
+        normalizedName,
+        normalizedPhone,
         birthDate || null,
-        email || null,
-        cpfCnpj || null,
+        normalizedEmail,
+        normalizedCpfCnpj,
         originId || null,
+        normalizedClientType,
+        normalizedResponsible,
+        normalizedReference,
         requestUser.id
       ]
     );
@@ -302,7 +374,19 @@ export async function PUT(request: NextRequest) {
     await authenticateAdmin(request);
 
     const body = await request.json();
-    const { id, name, phone, birthDate, email, cpfCnpj, originId, isActive } = body;
+    const {
+      id,
+      name,
+      phone,
+      birthDate,
+      email,
+      cpfCnpj,
+      originId,
+      isActive,
+      clientType,
+      responsibleName,
+      referenceContact,
+    } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -311,28 +395,86 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    if (!name || name.trim() === "") {
+    const normalizedName = name?.trim();
+    if (!normalizedName) {
       return NextResponse.json(
         { error: "Nome do cliente e obrigatorio" },
         { status: 400 }
       );
     }
 
-    if (email && !emailRegex.test(email)) {
+    if (clientType && !isValidClientType(clientType)) {
+      return NextResponse.json(
+        { error: "Tipo de cliente invalido. Use 'common' ou 'package'" },
+        { status: 400 }
+      );
+    }
+
+    const normalizedPhone = phone?.trim() || null;
+    const normalizedEmail = email?.trim() || null;
+    const normalizedCpfCnpj = cpfCnpj?.trim() || null;
+
+    if (normalizedEmail && !emailRegex.test(normalizedEmail)) {
       return NextResponse.json({ error: "Email invalido" }, { status: 400 });
     }
 
-    if (phone && !phoneRegex.test(phone)) {
+    if (normalizedPhone && !phoneRegex.test(normalizedPhone)) {
       return NextResponse.json(
         { error: "Telefone invalido. Use o formato (XX) XXXXX-XXXX" },
         { status: 400 }
       );
     }
 
+    const currentResult = await query(
+      `SELECT client_type, responsible_name, reference_contact, is_active FROM clients WHERE id = $1`,
+      [id]
+    );
+
+    if (currentResult.rowCount === 0) {
+      return NextResponse.json(
+        { error: "Cliente nao encontrado" },
+        { status: 404 }
+      );
+    }
+
+    const currentClient = currentResult.rows[0];
+
+    const normalizedClientType: ClientType = isValidClientType(clientType)
+      ? clientType
+      : (currentClient.client_type as ClientType) || "common";
+
+    const normalizedResponsible =
+      responsibleName !== undefined
+        ? (responsibleName?.trim() || null)
+        : currentClient.responsible_name;
+
+    const normalizedReference =
+      referenceContact !== undefined
+        ? (referenceContact?.trim() || null)
+        : currentClient.reference_contact;
+
+    const nextIsActive =
+      typeof isActive === "boolean" ? isActive : currentClient.is_active;
+
+    if (normalizedClientType === "package") {
+      if (!normalizedResponsible) {
+        return NextResponse.json(
+          { error: "Responsavel e obrigatorio para cliente de pacote" },
+          { status: 400 }
+        );
+      }
+      if (!normalizedReference) {
+        return NextResponse.json(
+          { error: "Contato de referencia e obrigatorio para cliente de pacote" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Validar CPF/CNPJ
-    if (cpfCnpj) {
-      const isCPF = cpfRegex.test(cpfCnpj);
-      const isCNPJ = cnpjRegex.test(cpfCnpj);
+    if (normalizedCpfCnpj) {
+      const isCPF = cpfRegex.test(normalizedCpfCnpj);
+      const isCNPJ = cnpjRegex.test(normalizedCpfCnpj);
 
       if (!isCPF && !isCNPJ) {
         return NextResponse.json(
@@ -341,14 +483,14 @@ export async function PUT(request: NextRequest) {
         );
       }
 
-      if (isCPF && !isValidCPF(cpfCnpj)) {
+      if (isCPF && !isValidCPF(normalizedCpfCnpj)) {
         return NextResponse.json(
           { error: "CPF invalido" },
           { status: 400 }
         );
       }
 
-      if (isCNPJ && !isValidCNPJ(cpfCnpj)) {
+      if (isCNPJ && !isValidCNPJ(normalizedCpfCnpj)) {
         return NextResponse.json(
           { error: "CNPJ invalido" },
           { status: 400 }
@@ -358,7 +500,7 @@ export async function PUT(request: NextRequest) {
       // Verificar se já existe outro cliente com este CPF/CNPJ
       const existingClient = await query(
         "SELECT id FROM clients WHERE cpf_cnpj = $1 AND id != $2",
-        [cpfCnpj, id]
+        [normalizedCpfCnpj, id]
       );
 
       if (existingClient.rows.length > 0) {
@@ -389,17 +531,29 @@ export async function PUT(request: NextRequest) {
 
     const result = await query(
       `UPDATE clients
-       SET name = $1, phone = $2, birth_date = $3, email = $4, cpf_cnpj = $5, origin_id = $6, is_active = $7
-       WHERE id = $8
-       RETURNING id, name, phone, birth_date, email, cpf_cnpj, origin_id, is_active, created_at, updated_at`,
+       SET name = $1,
+           phone = $2,
+           birth_date = $3,
+           email = $4,
+           cpf_cnpj = $5,
+           origin_id = $6,
+           client_type = $7,
+           responsible_name = $8,
+           reference_contact = $9,
+           is_active = $10
+       WHERE id = $11
+       RETURNING id, name, phone, birth_date, email, cpf_cnpj, origin_id, client_type, responsible_name, reference_contact, is_active, created_at, updated_at`,
       [
-        name.trim(),
-        phone || null,
+        normalizedName,
+        normalizedPhone,
         birthDate || null,
-        email || null,
-        cpfCnpj || null,
+        normalizedEmail,
+        normalizedCpfCnpj,
         originId || null,
-        isActive !== undefined ? isActive : true,
+        normalizedClientType,
+        normalizedResponsible,
+        normalizedReference,
+        nextIsActive,
         id
       ]
     );
