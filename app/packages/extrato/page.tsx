@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/Button";
 
@@ -43,7 +43,7 @@ const formatDateTime = (value: string) => {
   })}`;
 };
 
-export default function PublicPackagesStatementPage() {
+function PackagesStatementContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
 
@@ -341,5 +341,19 @@ export default function PublicPackagesStatementPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function PublicPackagesStatementPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-b from-black via-[#0f1115] to-black text-white flex items-center justify-center">
+          <div className="text-gray-300">Carregando extrato...</div>
+        </div>
+      }
+    >
+      <PackagesStatementContent />
+    </Suspense>
   );
 }
