@@ -27,7 +27,8 @@
       "Bash(tasklist:*)",
       "Bash(chcp 65001)",
       "Bash(iconv:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

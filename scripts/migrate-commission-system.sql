@@ -352,9 +352,9 @@ INSERT INTO commission_policies (
 ) VALUES
 (
     'Comissão Padrão - Dias Úteis',
-    'Comissão de 2,5% sobre vendas em dias úteis (seg-sex)',
+    'Comissão de 3,5% sobre vendas em dias úteis (seg-sex)',
     'percentage',
-    2.5,
+    3.5,
     'general',
     'weekdays',
     true

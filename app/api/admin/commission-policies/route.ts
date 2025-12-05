@@ -58,6 +58,7 @@ export async function GET(request: NextRequest) {
           scope,
           product_id,
           user_id,
+          sale_type,
           applies_to,
           consider_business_days,
           valid_from,

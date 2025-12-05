@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/Button";
+import { Modal } from "@/components/Modal";
 
 type Operation = {
   id: string;
@@ -18,6 +19,7 @@ type Operation = {
   unitPrice: number;
   balanceAfter: number;
   balanceQuantityAfter: number;
+  observations: string | null;
 };
 
 type Summary = {
@@ -54,6 +56,7 @@ function PackagesStatementContent() {
   const [typeFilter, setTypeFilter] = useState<"" | "compra" | "consumo">("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [selectedOperation, setSelectedOperation] = useState<Operation | null>(null);
 
   const hasValidToken = useMemo(() => Boolean(token), [token]);
 
@@ -73,7 +76,14 @@ function PackagesStatementContent() {
         throw new Error(data.error || "Erro ao carregar extrato");
       }
 
-      setOperations(Array.isArray(data.operations) ? data.operations : []);
+      const normalizedOperations: Operation[] = Array.isArray(data.operations)
+        ? data.operations.map((op: any) => ({
+            ...op,
+            observations: op.observations ?? null,
+          }))
+        : [];
+
+      setOperations(normalizedOperations);
       const firstSummary = Array.isArray(data.summary) ? data.summary[0] : null;
       setSummary(firstSummary);
     } catch (err) {
@@ -160,6 +170,8 @@ function PackagesStatementContent() {
     if (!filteredSummary?.lastOperation) return "Sem movimento";
     return formatDateTime(filteredSummary.lastOperation);
   }, [filteredSummary?.lastOperation]);
+
+  const hasObservation = (obs?: string | null) => Boolean(obs && String(obs).trim().length > 0);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-black via-[#0f1115] to-black text-white">
@@ -308,6 +320,7 @@ function PackagesStatementContent() {
                         <th className="px-4 py-3">Saldo (qtde)</th>
                         <th className="px-4 py-3">Saldo (R$)</th>
                         <th className="px-4 py-3">Atendente</th>
+                        <th className="px-4 py-3 text-right">Obs</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/10">
@@ -330,6 +343,24 @@ function PackagesStatementContent() {
                           <td className="px-4 py-3 text-emerald-200">{op.balanceQuantityAfter ?? 0}</td>
                           <td className="px-4 py-3 text-gray-200">{formatCurrency(op.balanceAfter ?? 0)}</td>
                           <td className="px-4 py-3 text-gray-200">{op.attendantName}</td>
+                          <td className="px-4 py-3 text-right">
+                            {op.operationType === "consumo" ? (
+                              hasObservation(op.observations) ? (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="rounded-lg px-3"
+                                  onClick={() => setSelectedOperation(op)}
+                                >
+                                  Ver obs
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-gray-500">Sem obs</span>
+                              )
+                            ) : (
+                              <span className="text-xs text-gray-500">-</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -340,6 +371,40 @@ function PackagesStatementContent() {
           </>
         )}
       </div>
+
+      <Modal
+        open={Boolean(selectedOperation)}
+        onClose={() => setSelectedOperation(null)}
+        title="Observacoes do consumo"
+        widthClassName="max-w-2xl"
+      >
+        {selectedOperation && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
+              <div>
+                <p className="text-gray-400">Data</p>
+                <p className="font-semibold text-white">{formatDateTime(selectedOperation.date)}</p>
+              </div>
+              <div>
+                <p className="text-gray-400">Servico</p>
+                <p className="font-semibold text-white">{selectedOperation.serviceName || "-"}</p>
+              </div>
+              <div>
+                <p className="text-gray-400">Atendente</p>
+                <p className="font-semibold text-white">{selectedOperation.attendantName}</p>
+              </div>
+              <div>
+                <p className="text-gray-400">Quantidade consumida</p>
+                <p className="font-semibold text-white">{selectedOperation.quantity}</p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-gray-100 whitespace-pre-wrap">
+              {selectedOperation.observations}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

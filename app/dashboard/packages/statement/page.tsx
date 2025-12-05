@@ -129,7 +129,17 @@ export default function PackagesStatementPage() {
     fetchAttendants();
   }, []);
 
-  const selectedSummary = summary.find((s) => s.clientId === clientId) || summary[0];
+  const filteredSummary = useMemo(() => {
+    if (!clientId) return summary;
+    return summary.filter((s) => s.clientId === clientId);
+  }, [clientId, summary]);
+
+  const filteredOperations = useMemo(() => {
+    if (!clientId) return operations;
+    return operations.filter((op) => op.clientId === clientId);
+  }, [clientId, operations]);
+
+  const selectedSummary = filteredSummary[0];
 
   return (
     <div className="p-8 space-y-6 text-white">
@@ -258,7 +268,7 @@ export default function PackagesStatementPage() {
         <div className="overflow-x-auto">
           {loading ? (
             <div className="px-6 py-10 text-center text-gray-300">Carregando extrato...</div>
-          ) : operations.length === 0 ? (
+          ) : filteredOperations.length === 0 ? (
             <div className="px-6 py-10 text-center text-gray-400">Nenhum lancamento encontrado.</div>
           ) : (
             <table className="min-w-full divide-y divide-white/10 text-sm">
@@ -275,7 +285,7 @@ export default function PackagesStatementPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {operations.map((op) => (
+                {filteredOperations.map((op) => (
                   <tr key={op.id} className="hover:bg-white/5 transition-colors">
                     <td className="px-4 py-3 text-gray-200">{formatDateTime(op.date)}</td>
                     <td className="px-4 py-3">

@@ -70,7 +70,7 @@ type FormState = {
 const initialForm: FormState = {
   clientId: "",
   observations: "",
-  paymentMethod: "dinheiro",
+  paymentMethod: "pix",
   generalDiscountType: "percentage",
   generalDiscountValue: 0,
 };
@@ -309,22 +309,22 @@ export default function NewSalePage() {
 
       if (ranges.length === 0) return 0;
 
-      let calculatedTotal = 0;
+      // Buscar a faixa de 1-10 unidades
+      const firstRange = ranges.find(r => r.minQuantity === 1 || r.minQuantity <= 10);
+      // Buscar a faixa de 11+ unidades
+      const secondRange = ranges.find(r => r.minQuantity >= 11);
 
-      // Calculate progressive cost using intersection logic
-      for (const range of ranges) {
-          const rangeMax = range.maxQuantity ?? Infinity;
-          const rangeMin = range.minQuantity;
-          
-          const overlapStart = Math.max(1, rangeMin);
-          const overlapEnd = Math.min(quantity, rangeMax);
-          
-          const itemsInThisRange = Math.max(0, overlapEnd - overlapStart + 1);
-          
-          calculatedTotal += itemsInThisRange * range.unitPrice;
+      const firstRangePrice = firstRange?.unitPrice || 40;
+      const secondRangePrice = secondRange?.unitPrice || 15;
+
+      // Fórmula progressiva (como IR):
+      // Primeiros 10: qty × firstRangePrice
+      // A partir do 11º: (qty - 10) × secondRangePrice + (10 × firstRangePrice)
+      if (quantity <= 10) {
+        return quantity * firstRangePrice;
+      } else {
+        return (quantity - 10) * secondRangePrice + (10 * firstRangePrice);
       }
-
-      return calculatedTotal;
     }
 
     // Standard calculation for other services (including Atraso)
@@ -516,7 +516,7 @@ export default function NewSalePage() {
   };
 
   return (
-    <div className="p-8 space-y-6 text-white">
+    <div className="p-8 space-y-6 text-white [&_input[type=number]]:[-moz-appearance:textfield] [&_input[type=number]::-webkit-outer-spin-button]:appearance-none [&_input[type=number]::-webkit-inner-spin-button]:appearance-none">
       <div className="flex items-center justify-between">
         <div className="flex flex-col gap-2">
           <p className="text-sm uppercase tracking-widest text-gray-400">

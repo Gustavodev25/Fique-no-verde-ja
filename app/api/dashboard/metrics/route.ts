@@ -186,14 +186,44 @@ export async function GET(request: NextRequest) {
       adminAttendantId,
     });
 
-    const baseFilterQuery = `
-      SELECT DISTINCT s.id
-      FROM sales s
-      LEFT JOIN sale_items si ON si.sale_id = s.id
-      LEFT JOIN services serv ON si.product_id = serv.id
-      WHERE s.status != 'cancelada'
-        ${periodTotalsFilters.clause}
-    `;
+    // Verificar se a tabela client_package_consumptions existe
+    let hasConsumptionsTable = false;
+    try {
+      const tableCheck = await query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables
+          WHERE table_schema = 'public'
+          AND table_name = 'client_package_consumptions'
+        ) as exists
+      `);
+      hasConsumptionsTable = tableCheck.rows[0]?.exists || false;
+    } catch (err) {
+      console.warn("Error checking for client_package_consumptions table:", err);
+    }
+
+    const baseFilterQuery = hasConsumptionsTable
+      ? `
+        SELECT DISTINCT s.id
+        FROM sales s
+        LEFT JOIN sale_items si ON si.sale_id = s.id
+        LEFT JOIN services serv ON si.product_id = serv.id
+        LEFT JOIN clients c ON s.client_id = c.id
+        LEFT JOIN client_package_consumptions cpc ON cpc.sale_id = s.id
+        WHERE s.status != 'cancelada'
+          AND cpc.id IS NULL
+          AND (c.client_type IS NULL OR c.client_type != 'package')
+          ${periodTotalsFilters.clause}
+      `
+      : `
+        SELECT DISTINCT s.id
+        FROM sales s
+        LEFT JOIN sale_items si ON si.sale_id = s.id
+        LEFT JOIN services serv ON si.product_id = serv.id
+        LEFT JOIN clients c ON s.client_id = c.id
+        WHERE s.status != 'cancelada'
+          AND (c.client_type IS NULL OR c.client_type != 'package')
+          ${periodTotalsFilters.clause}
+      `;
 
 const periodTotalsQuery = `
       SELECT

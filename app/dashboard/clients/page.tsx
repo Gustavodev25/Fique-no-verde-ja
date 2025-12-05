@@ -296,6 +296,14 @@ export default function ClientsPage() {
       nextValue = formatPhone(value);
     } else if (name === "cpfCnpj") {
       nextValue = formatCpfCnpj(value);
+    } else if (name === "referenceContact" && formData.clientType === "package") {
+      // para clientes de pacote, manter telefone igual ao contato de referencia
+      setFormData((prev) => ({
+        ...prev,
+        referenceContact: nextValue,
+        phone: formatPhone(nextValue),
+      }));
+      return;
     }
 
     setFormData((prev) => ({
@@ -362,6 +370,10 @@ export default function ClientsPage() {
     try {
       const payload = {
         ...formData,
+        phone:
+          formData.clientType === "package"
+            ? (formData.referenceContact || formData.phone || "").trim()
+            : formData.phone,
         responsibleName: formData.responsibleName.trim(),
         referenceContact: formData.referenceContact.trim(),
       };
@@ -803,7 +815,7 @@ export default function ClientsPage() {
               <input
                 type="text"
                 name="referenceContact"
-                placeholder="Contato de referencia (telefone/email)"
+                placeholder="Contato de referencia (email ou telefone principal)"
                 value={formData.referenceContact}
                 onChange={handleChange}
                 required={formData.clientType === "package"}
@@ -812,16 +824,7 @@ export default function ClientsPage() {
             </div>
           )}
 
-          {formData.clientType === "package" ? (
-            <input
-              type="tel"
-              name="phone"
-              placeholder="(11) 99999-9999"
-              value={formData.phone}
-              onChange={handleChange}
-              className="w-full rounded-xl border border-white/20 bg-black/30 px-4 py-3 text-white placeholder-gray-400 focus:border-white focus:outline-none"
-            />
-          ) : (
+          {formData.clientType === "package" ? null : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <input
                 type="tel"

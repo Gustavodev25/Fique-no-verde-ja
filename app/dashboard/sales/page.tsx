@@ -86,7 +86,7 @@ const initialForm = {
   discountType: "percentage" as DiscountType,
   discountValue: 0,
   observations: "",
-  paymentMethod: "dinheiro" as PaymentMethod,
+  paymentMethod: "pix" as PaymentMethod,
   packageId: "", // Usado quando saleType = "03"
 };
 
@@ -140,10 +140,11 @@ export default function SalesPage() {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [sortField, setSortField] = useState<"date" | "client" | "total">("date");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [saleTypeFilter, setSaleTypeFilter] = useState<"" | "common" | "package">("");
 
   const hasFilters = useMemo(
-    () => Boolean(startDate || endDate || serviceFilter || attendantFilter || dayType),
-    [startDate, endDate, serviceFilter, attendantFilter, dayType]
+    () => Boolean(startDate || endDate || serviceFilter || attendantFilter || dayType || saleTypeFilter),
+    [startDate, endDate, serviceFilter, attendantFilter, dayType, saleTypeFilter]
   );
 
   const filteredSales = useMemo(() => {
@@ -176,9 +177,24 @@ export default function SalesPage() {
     if (dayType) {
       result = result.filter((sale) => getDayType(sale.saleDate) === dayType);
     }
+    if (saleTypeFilter) {
+      result = result.filter((sale) => {
+        // Identificar tipo de venda pelo cliente
+        const client = clients.find((c) => c.name === sale.clientName);
+        if (!client) return true; // Se não encontrar, mostrar
+
+        if (saleTypeFilter === "package") {
+          // Venda de pacote: cliente é transportadora
+          return client.clientType === "package";
+        } else {
+          // Venda comum: cliente não é transportadora
+          return client.clientType === "common";
+        }
+      });
+    }
 
     return result;
-  }, [attendantFilter, dayType, endDate, isAdmin, sales, serviceFilter, services, startDate]);
+  }, [attendantFilter, dayType, endDate, isAdmin, sales, serviceFilter, services, startDate, saleTypeFilter, clients]);
 
   const sortedSales = useMemo(() => {
     const sorted = [...filteredSales];
@@ -495,9 +511,20 @@ export default function SalesPage() {
   const availablePackages = useMemo(() => {
     if (formData.saleType !== "03" || !formData.carrierId) return [];
 
-    return clientPackages.filter((pkg) => {
+    const filtered = clientPackages.filter((pkg) => {
       return pkg.clientId === formData.carrierId && pkg.availableQuantity > 0;
     });
+
+    console.log("DEBUG - Pacotes disponíveis:", {
+      carrierId: formData.carrierId,
+      totalPackages: clientPackages.length,
+      carrierPackages: clientPackages.filter(p => p.clientId === formData.carrierId).length,
+      availablePackages: filtered.length,
+      allPackages: clientPackages,
+      filtered
+    });
+
+    return filtered;
   }, [clientPackages, formData.saleType, formData.carrierId]);
 
   // Pacote selecionado para consumo
@@ -525,18 +552,46 @@ export default function SalesPage() {
       }
 
       // Para "Reclamação", usar cálculo progressivo (como IR)
-      const isReclamacao = serviceName.toLowerCase().includes("reclamacao");
+      const normalizedName = serviceName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const isReclamacao = normalizedName.includes("reclamacao");
+
+      console.log("DEBUG calculateProgressivePrice:", {
+        serviceName,
+        normalizedName,
+        isReclamacao,
+        qty,
+        saleType: formData.saleType,
+        rangesCount: applicableRanges.length
+      });
 
       if (isReclamacao) {
-        // Fórmula simplificada:
-        // Se qty <= 10: qty × 40
-        // Se qty > 10: (qty - 10) × 15 + (10 × 40)
+        // Buscar a faixa de 1-10 unidades
+        const firstRange = applicableRanges.find(r => r.minQuantity === 1 || r.minQuantity <= 10);
+        // Buscar a faixa de 11+ unidades
+        const secondRange = applicableRanges.find(r => r.minQuantity >= 11);
+
+        const firstRangePrice = firstRange?.unitPrice || 40;
+        const secondRangePrice = secondRange?.unitPrice || 15;
+
+        console.log("DEBUG Reclamacao calculation:", {
+          firstRange,
+          secondRange,
+          firstRangePrice,
+          secondRangePrice,
+          qty
+        });
+
+        // Fórmula progressiva:
+        // Primeiros 10: qty × firstRangePrice
+        // A partir do 11º: (qty - 10) × secondRangePrice + (10 × firstRangePrice)
         if (qty <= 10) {
-          return qty * (applicableRanges[0]?.unitPrice || 40);
+          const result = qty * firstRangePrice;
+          console.log("Result (<=10):", result);
+          return result;
         } else {
-          const firstRangePrice = applicableRanges[0]?.unitPrice || 40;
-          const secondRangePrice = applicableRanges[1]?.unitPrice || 15;
-          return (qty - 10) * secondRangePrice + (10 * firstRangePrice);
+          const result = (qty - 10) * secondRangePrice + (10 * firstRangePrice);
+          console.log("Result (>10):", result);
+          return result;
         }
       } else {
         // Para outros serviços (como "Atraso"), usar a faixa correspondente
@@ -546,11 +601,30 @@ export default function SalesPage() {
             (r.maxQuantity === null || qty <= r.maxQuantity)
         );
 
+        console.log("DEBUG Other service calculation:", {
+          range,
+          qty,
+          result: range ? qty * range.unitPrice : 0
+        });
+
         return range ? qty * range.unitPrice : 0;
       }
     },
     [formData.saleType]
   );
+
+  const modalSubtotal = useMemo(() => {
+    if (formData.saleType === "03" && selectedPackage) {
+      return selectedPackage.unitPrice * formData.quantity;
+    }
+    if (!selectedService) return 0;
+
+    return calculateProgressivePrice(
+      formData.quantity,
+      selectedService.name,
+      selectedService.priceRanges
+    );
+  }, [formData.saleType, formData.quantity, selectedPackage, selectedService, calculateProgressivePrice]);
 
   const calculateTotal = useMemo(() => {
     // Tipo 03 - Consumo de Pacote: usa preço do pacote (SEM desconto)
@@ -908,6 +982,21 @@ export default function SalesPage() {
       : formatCurrency(item.discountValue);
   };
 
+  const getSaleTypeLabel = (sale: Sale): { type: string; label: string; color: string } => {
+    const client = clients.find((c) => c.name === sale.clientName);
+
+    if (!client) {
+      return { type: "01", label: "COMUM", color: "bg-blue-500/20 text-blue-300 border-blue-500/40" };
+    }
+
+    if (client.clientType === "package") {
+      return { type: "02", label: "VENDA DE PACOTE", color: "bg-purple-500/20 text-purple-300 border-purple-500/40" };
+    }
+
+    // TODO: Identificar tipo 03 (Consumo de Pacote) quando tivermos essa informação no banco
+    return { type: "01", label: "COMUM", color: "bg-blue-500/20 text-blue-300 border-blue-500/40" };
+  };
+
   return (
     <div className="p-8 space-y-6 text-white">
       <div className="flex flex-col gap-2">
@@ -992,6 +1081,36 @@ export default function SalesPage() {
                 </select>
               </div>
             )}
+            <div className="flex flex-col gap-1">
+              <p className="text-xs uppercase text-gray-400">Tipo de Dia</p>
+              <select
+                value={dayType}
+                onChange={(e) => {
+                  setDayType(e.target.value as "" | "weekday" | "non_working");
+                  setCurrentPage(1);
+                }}
+                className="rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-white text-sm focus:border-white focus:outline-none"
+              >
+                <option value="">Todos os dias</option>
+                <option value="weekday">Dias úteis (Seg-Sex)</option>
+                <option value="non_working">Finais de semana (Sáb-Dom)</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <p className="text-xs uppercase text-gray-400">Tipo de Venda</p>
+              <select
+                value={saleTypeFilter}
+                onChange={(e) => {
+                  setSaleTypeFilter(e.target.value as "" | "common" | "package");
+                  setCurrentPage(1);
+                }}
+                className="rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-white text-sm focus:border-white focus:outline-none"
+              >
+                <option value="">Todos os tipos</option>
+                <option value="common">Vendas Comuns</option>
+                <option value="package">Vendas de Pacote</option>
+              </select>
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -1038,6 +1157,8 @@ export default function SalesPage() {
                   setEndDate("");
                   setServiceFilter("");
                   setAttendantFilter("");
+                  setDayType("");
+                  setSaleTypeFilter("");
                   setSortField("date");
                   setSortDirection("desc");
                   setCurrentPage(1);
@@ -1069,7 +1190,27 @@ export default function SalesPage() {
                 >
                   <div className="flex-1">
                     <div className="flex items-baseline justify-between md:justify-start gap-4">
-                      <p className="font-semibold text-lg text-white">{sale.clientName}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-lg text-white">{sale.clientName}</p>
+                        {(() => {
+                          const saleTypeInfo = getSaleTypeLabel(sale);
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${saleTypeInfo.color}`}>
+                              {saleTypeInfo.type} - {saleTypeInfo.label}
+                            </span>
+                          );
+                        })()}
+                        {sale.status === "cancelada" && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded border font-medium uppercase ${statusColors[sale.status].bg} ${statusColors[sale.status].text} ${statusColors[sale.status].border}`}>
+                            CANCELADA
+                          </span>
+                        )}
+                        {sale.refundTotal > 0 && (
+                          <span className="text-[10px] px-2 py-0.5 rounded border font-medium bg-red-500/20 text-red-300 border-red-500/40">
+                            ESTORNO - {formatCurrency(sale.refundTotal)}
+                          </span>
+                        )}
+                      </div>
                       <span className="md:hidden font-bold text-emerald-400">{formatCurrency(sale.total)}</span>
                     </div>
 
@@ -1381,12 +1522,14 @@ export default function SalesPage() {
                     {availablePackages.length > 0 ? (
                       availablePackages.map((pkg) => (
                         <option key={pkg.id} value={pkg.id}>
-                          {pkg.serviceName} ({pkg.availableQuantity} disponíveis)
+                          {pkg.serviceName} ({pkg.availableQuantity} disponíveis) - R$ {pkg.unitPrice.toFixed(2)}
                         </option>
                       ))
                     ) : (
                       <option value="" disabled>
-                        Nenhum pacote disponível para este cliente
+                        {clientPackages.filter(p => p.clientId === formData.carrierId).length === 0
+                          ? "Esta transportadora não possui pacotes cadastrados"
+                          : "Todos os pacotes desta transportadora foram consumidos"}
                       </option>
                     )}
                   </select>
@@ -1528,11 +1671,11 @@ export default function SalesPage() {
           </div>
 
           <div className="pt-4 border-t border-white/10 space-y-2">
-            {selectedService && (
+            {selectedService && formData.saleType !== "03" && (
               <>
                 <div className="flex justify-between text-sm text-gray-300">
-                  <span>Subtotal ({formData.quantity}x {formatCurrency(selectedService.basePrice)}):</span>
-                  <span>{formatCurrency(selectedService.basePrice * formData.quantity)}</span>
+                  <span>Subtotal ({formData.quantity}x {formatCurrency(modalSubtotal / formData.quantity)}):</span>
+                  <span>{formatCurrency(modalSubtotal)}</span>
                 </div>
                 {formData.discountValue > 0 && (
                   <div className="flex justify-between text-sm text-gray-300">
@@ -1540,7 +1683,7 @@ export default function SalesPage() {
                     <span className="text-red-300">
                       -{formatCurrency(
                         formData.discountType === "percentage"
-                          ? (selectedService.basePrice * formData.quantity * formData.discountValue) / 100
+                          ? (modalSubtotal * formData.discountValue) / 100
                           : formData.discountValue
                       )}
                     </span>

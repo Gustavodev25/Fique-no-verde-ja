@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
           cp.client_id,
           c.name AS client_name,
           cp.sale_id,
+          s.observations AS sale_observations,
           u.first_name || ' ' || u.last_name AS attendant_name,
           cp.created_at AS op_date,
           cp.total_paid AS value,
@@ -68,6 +69,7 @@ export async function GET(request: NextRequest) {
           cp.client_id,
           c.name AS client_name,
           pc.sale_id,
+          s.observations AS sale_observations,
           u.first_name || ' ' || u.last_name AS attendant_name,
           pc.consumed_at AS op_date,
           -pc.total_value AS value,
@@ -121,6 +123,7 @@ export async function GET(request: NextRequest) {
         unitPrice: Number(op.unit_price),
         balanceAfter: nextBalance,
         balanceQuantityAfter: nextQty,
+        observations: op.sale_observations || null,
       };
     });
 

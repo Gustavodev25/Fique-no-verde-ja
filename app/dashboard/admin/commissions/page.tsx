@@ -16,6 +16,7 @@ type CommissionPolicy = {
   scope: string;
   product_id: string | null;
   user_id: string | null;
+  sale_type: string;
   applies_to: string;
   consider_business_days: boolean;
   valid_from: string;
@@ -91,6 +92,7 @@ function CommissionsPolicies() {
                 <th className="px-4 py-3">Nome</th>
                 <th className="px-4 py-3">Tipo/Valor</th>
                 <th className="px-4 py-3">Escopo</th>
+                <th className="px-4 py-3">Tipo venda</th>
                 <th className="px-4 py-3">Aplica em</th>
                 <th className="px-4 py-3">Vigencia</th>
                 <th className="px-4 py-3">Ativa</th>
@@ -118,6 +120,17 @@ function CommissionsPolicies() {
                         : p.scope === "user"
                           ? "Usuario"
                           : "Usuario + Produto"}
+                  </td>
+                  <td className="px-4 py-3 text-gray-200">
+                    {p.sale_type === "all"
+                      ? "Todos"
+                      : p.sale_type === "01"
+                        ? "Venda comum (01)"
+                        : p.sale_type === "02"
+                          ? "Venda de pacote (02)"
+                          : p.sale_type === "03"
+                            ? "Consumo de pacote (03)"
+                            : p.sale_type}
                   </td>
                   <td className="px-4 py-3 text-gray-200">
                     {p.applies_to === "all"
