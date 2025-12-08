@@ -1205,9 +1205,9 @@ export default function SalesPage() {
                             CANCELADA
                           </span>
                         )}
-                        {sale.refundTotal > 0 && (
+                        {(sale.refundTotal ?? 0) > 0 && (
                           <span className="text-[10px] px-2 py-0.5 rounded border font-medium bg-red-500/20 text-red-300 border-red-500/40">
-                            ESTORNO - {formatCurrency(sale.refundTotal)}
+                            ESTORNO - {formatCurrency(sale.refundTotal ?? 0)}
                           </span>
                         )}
                       </div>
