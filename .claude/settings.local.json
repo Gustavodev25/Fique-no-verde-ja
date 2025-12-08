@@ -28,7 +28,9 @@
       "Bash(chcp 65001)",
       "Bash(iconv:*)",
       "Bash(ls:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
     ],
     "deny": [],
     "ask": []
