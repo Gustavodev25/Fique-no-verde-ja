@@ -403,6 +403,8 @@ export default function SalesPage() {
       });
 
       const data = await response.json();
+      console.log("[SALES PAGE] Packages fetched:", data.packages?.length || 0);
+      console.log("[SALES PAGE] Packages data:", data.packages);
 
       if (response.ok) {
         setClientPackages(
@@ -517,11 +519,26 @@ export default function SalesPage() {
   const clientOptions = useMemo(() => commonClients, [commonClients]);
 
   const availablePackages = useMemo(() => {
-    if (formData.saleType !== "03" || !formData.carrierId) return [];
+    if (formData.saleType !== "03" || !formData.carrierId) {
+      console.log("[SALES PAGE] availablePackages: returning empty (saleType or carrierId missing)", {
+        saleType: formData.saleType,
+        carrierId: formData.carrierId,
+      });
+      return [];
+    }
+
+    console.log("[SALES PAGE] Filtering packages for carrierId:", formData.carrierId);
+    console.log("[SALES PAGE] Total packages:", clientPackages.length);
 
     const filtered = clientPackages.filter((pkg) => {
-      return pkg.clientId === formData.carrierId && pkg.availableQuantity > 0;
+      const matches = pkg.clientId === formData.carrierId && pkg.availableQuantity > 0;
+      if (matches) {
+        console.log("[SALES PAGE] Package matches:", pkg);
+      }
+      return matches;
     });
+
+    console.log("[SALES PAGE] Filtered packages:", filtered.length);
 
     return filtered;
   }, [clientPackages, formData.saleType, formData.carrierId]);

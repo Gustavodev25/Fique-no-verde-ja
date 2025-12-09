@@ -122,7 +122,12 @@ export async function GET(request: NextRequest) {
     sql += ` ORDER BY cp.created_at DESC`;
 
     // Executar query
+    console.log("[PACKAGES API] SQL:", sql);
+    console.log("[PACKAGES API] Params:", params);
+
     const result = await query(sql, params);
+
+    console.log("[PACKAGES API] Found packages:", result.rows.length);
 
     return NextResponse.json(
       {
