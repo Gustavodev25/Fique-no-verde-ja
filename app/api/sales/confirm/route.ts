@@ -115,16 +115,59 @@ export async function POST(request: NextRequest) {
 
       // Buscar itens da venda para gerar comissões
       const itemsResult = await query(
-        `SELECT id, total FROM sale_items WHERE sale_id = $1`,
+        `SELECT id, total, quantity, sale_type FROM sale_items WHERE sale_id = $1`,
         [saleId]
       );
 
-      // Gerar comissões (5% sobre o total líquido de cada item)
-      // Nota: Em um sistema real, isso deveria vir da tabela commission_policies
-      const commissionRate = 5.00; // 5%
+      // Buscar políticas de comissão ativas
+      const policiesResult = await query(
+        `SELECT * FROM commission_policies
+         WHERE is_active = true
+         AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
+         AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)`,
+        []
+      );
+
+      const policies = policiesResult.rows;
 
       for (const item of itemsResult.rows) {
-        const commissionAmount = parseFloat(item.total) * (commissionRate / 100);
+        const itemSaleType = item.sale_type || "01";
+        const itemTotal = parseFloat(item.total);
+        const itemQuantity = parseInt(item.quantity || 1);
+
+        // Buscar política aplicável para o sale_type do item
+        let policy = policies.find(p => p.sale_type === itemSaleType && p.scope === 'general');
+
+        // Se não encontrar política específica, usar a política geral
+        if (!policy) {
+          policy = policies.find(p => (p.sale_type === 'all' || !p.sale_type) && p.scope === 'general');
+        }
+
+        if (!policy) {
+          console.warn(`[CONFIRM SALE] Nenhuma política encontrada para sale_type: ${itemSaleType}`);
+          continue;
+        }
+
+        let commissionAmount = 0;
+        let commissionType = 'percentage';
+        let commissionRate = 0;
+
+        // Calcular comissão baseado no tipo da política
+        if (policy.type === 'fixed_per_unit') {
+          commissionAmount = parseFloat(policy.value) * itemQuantity;
+          commissionType = 'fixed_per_unit';
+          commissionRate = parseFloat(policy.value);
+        } else if (policy.type === 'percentage') {
+          commissionRate = parseFloat(policy.value);
+          commissionAmount = itemTotal * (commissionRate / 100);
+          commissionType = 'percentage';
+        } else {
+          // Tipo padrão (porcentagem)
+          commissionRate = 5.00;
+          commissionAmount = itemTotal * (commissionRate / 100);
+        }
+
+        console.log(`[CONFIRM SALE] Commission for item ${item.id.slice(0, 8)}: ${commissionAmount} (type: ${commissionType}, rate: ${commissionRate}, sale_type: ${itemSaleType})`);
 
         await query(
           `INSERT INTO commissions (
@@ -136,16 +179,19 @@ export async function POST(request: NextRequest) {
             commission_rate,
             commission_amount,
             reference_date,
-            status
-          ) VALUES ($1, $2, $3, $4, 'percentage', $5, $6, $7::DATE, 'a_pagar')`,
+            status,
+            commission_policy_id
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::DATE, 'a_pagar', $9)`,
           [
             saleId,
             item.id,
             sale.attendant_id,
-            item.total,
+            itemTotal,
+            commissionType,
             commissionRate,
             commissionAmount,
             sale.sale_date,
+            policy.id,
           ]
         );
       }
