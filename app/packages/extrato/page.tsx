@@ -53,9 +53,12 @@ function PackagesStatementContent() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Filtros
   const [typeFilter, setTypeFilter] = useState<"" | "compra" | "consumo">("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  
   const [selectedOperation, setSelectedOperation] = useState<Operation | null>(null);
 
   const hasValidToken = useMemo(() => Boolean(token), [token]);
@@ -69,7 +72,13 @@ function PackagesStatementContent() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/packages/public-statement?token=${encodeURIComponent(token)}`);
+      const params = new URLSearchParams();
+      params.set("token", token);
+      if (typeFilter) params.set("type", typeFilter);
+      if (startDate) params.set("startDate", startDate);
+      if (endDate) params.set("endDate", endDate);
+
+      const res = await fetch(`/api/packages/public-statement?${params.toString()}`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -100,76 +109,19 @@ function PackagesStatementContent() {
   useEffect(() => {
     fetchStatement();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token]); 
+  // Nao incluir filtros no deps para evitar refetch automatico se nao desejado, 
+  // mas geralmente em filtros de tabela eh bom ter botao de "Aplicar" ou debounce.
+  // Aqui vamos manter o botao "Recarregar" como gatilho principal de atualizacao manual alem do mount.
 
-  const filteredOperations = useMemo(() => {
-    const matches = (op: Operation) => {
-      if (typeFilter && op.operationType !== typeFilter) return false;
-      if (startDate && new Date(op.date) < new Date(`${startDate}T00:00:00`)) return false;
-      if (endDate && new Date(op.date) > new Date(`${endDate}T23:59:59.999`)) return false;
-      return true;
-    };
-
-    const asc = [...operations]
-      .filter(matches)
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    let balanceValue = 0;
-    let balanceQty = 0;
-
-    const withBalances = asc.map((op) => {
-      balanceValue += op.value;
-      balanceQty += op.operationType === "compra" ? op.quantity : -op.quantity;
-
-      return {
-        ...op,
-        balanceAfter: balanceValue,
-        balanceQuantityAfter: balanceQty,
-      };
-    });
-
-    return withBalances.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [operations, typeFilter, startDate, endDate]);
-
-  const filteredSummary = useMemo<Summary | null>(() => {
-    if (!summary && filteredOperations.length === 0) return null;
-
-    const base: Summary = {
-      clientId: summary?.clientId || filteredOperations[0]?.clientId || "",
-      clientName: summary?.clientName || filteredOperations[0]?.clientName || "",
-      totalAcquired: 0,
-      totalConsumed: 0,
-      balanceCurrent: 0,
-      totalQuantityAcquired: 0,
-      totalQuantityConsumed: 0,
-      balanceQuantityCurrent: 0,
-      lastOperation: null,
-    };
-
-    for (const op of filteredOperations) {
-      if (op.operationType === "compra") {
-        base.totalAcquired += Math.abs(op.value);
-        base.totalQuantityAcquired += op.quantity;
-        base.balanceCurrent += op.value;
-        base.balanceQuantityCurrent += op.quantity;
-      } else {
-        base.totalConsumed += Math.abs(op.value);
-        base.totalQuantityConsumed += op.quantity;
-        base.balanceCurrent += op.value;
-        base.balanceQuantityCurrent -= op.quantity;
-      }
-      if (!base.lastOperation || new Date(op.date).getTime() > new Date(base.lastOperation).getTime()) {
-        base.lastOperation = op.date;
-      }
-    }
-
-    return base;
-  }, [filteredOperations, summary]);
+  // O "Resumo" exibido nos cards deve refletir o que veio da API (que ja esta filtrado se os params foram enviados)
+  // Como agora o filtro eh server-side, o summary retornado pela API ja deve considerar o filtro (se implementado no backend)
+  // No backend public-statement, eu implementei o calculo de summary baseado nos filteredOps.
 
   const lastOperationLabel = useMemo(() => {
-    if (!filteredSummary?.lastOperation) return "Sem movimento";
-    return formatDateTime(filteredSummary.lastOperation);
-  }, [filteredSummary?.lastOperation]);
+    if (!summary?.lastOperation) return "Sem movimento";
+    return formatDateTime(summary.lastOperation);
+  }, [summary?.lastOperation]);
 
   const hasObservation = (obs?: string | null) => Boolean(obs && String(obs).trim().length > 0);
 
@@ -180,8 +132,8 @@ function PackagesStatementContent() {
           <p className="text-xs uppercase tracking-[0.3em] text-blue-300/70">Extrato exclusivo</p>
           <h1 className="text-3xl font-semibold">
             Extrato de Pacotes{" "}
-            {filteredSummary?.clientName || summary?.clientName ? (
-              <span className="text-blue-200">- {filteredSummary?.clientName || summary?.clientName}</span>
+            {summary?.clientName ? (
+              <span className="text-blue-200">- {summary.clientName}</span>
             ) : (
               <span className="text-gray-400">(Transportadora)</span>
             )}
@@ -243,7 +195,7 @@ function PackagesStatementContent() {
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" className="rounded-xl" onClick={fetchStatement} disabled={loading || !hasValidToken}>
-                    {loading ? "Recarregando..." : "Recarregar"}
+                    {loading ? "Recarregando..." : "Filtrar"}
                   </Button>
                   <Button
                     size="sm"
@@ -253,6 +205,9 @@ function PackagesStatementContent() {
                       setTypeFilter("");
                       setStartDate("");
                       setEndDate("");
+                      // Opcional: chamar fetchStatement() aqui se quiser resetar imediato.
+                      // Vamos deixar o usuario clicar em Filtrar (que vai virar "Recarregar" na UI)
+                      // ou podemos forcar um reset visual e pedir pra recarregar.
                     }}
                   >
                     Limpar filtros
@@ -265,28 +220,28 @@ function PackagesStatementContent() {
               <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/5 p-4">
                 <p className="text-xs uppercase text-emerald-200/80 mb-1">Saldo de creditos (qtde)</p>
                 <p className="text-3xl font-bold text-emerald-200">
-                  {filteredSummary ? filteredSummary.balanceQuantityCurrent ?? 0 : "-"}
+                  {summary ? summary.balanceQuantityCurrent ?? 0 : "-"}
                 </p>
                 <p className="text-xs text-emerald-100/70 mt-1">
-                  Saldo financeiro: {formatCurrency(filteredSummary?.balanceCurrent ?? 0)}
+                  Saldo financeiro: {formatCurrency(summary?.balanceCurrent ?? 0)}
                 </p>
               </div>
               <div className="rounded-2xl border border-white/15 bg-white/5 p-4">
                 <p className="text-xs uppercase text-gray-300 mb-1">Creditos adquiridos</p>
                 <p className="text-xl font-semibold text-white">
-                  {filteredSummary ? filteredSummary.totalQuantityAcquired ?? 0 : "-"}
+                  {summary ? summary.totalQuantityAcquired ?? 0 : "-"}
                 </p>
                 <p className="text-xs text-gray-400 mt-1">
-                  Valor: {formatCurrency(filteredSummary?.totalAcquired ?? 0)}
+                  Valor: {formatCurrency(summary?.totalAcquired ?? 0)}
                 </p>
               </div>
               <div className="rounded-2xl border border-white/15 bg-white/5 p-4">
                 <p className="text-xs uppercase text-gray-300 mb-1">Creditos consumidos</p>
                 <p className="text-xl font-semibold text-white">
-                  {filteredSummary ? filteredSummary.totalQuantityConsumed ?? 0 : "-"}
+                  {summary ? summary.totalQuantityConsumed ?? 0 : "-"}
                 </p>
                 <p className="text-xs text-gray-400 mt-1">
-                  Valor: {formatCurrency(filteredSummary?.totalConsumed ?? 0)}
+                  Valor: {formatCurrency(summary?.totalConsumed ?? 0)}
                 </p>
               </div>
             </div>
@@ -305,9 +260,9 @@ function PackagesStatementContent() {
               <div className="overflow-x-auto">
                 {loading ? (
                   <div className="px-6 py-10 text-center text-gray-300">Carregando extrato...</div>
-                ) : filteredOperations.length === 0 ? (
+                ) : operations.length === 0 ? (
                   <div className="px-6 py-10 text-center text-gray-400">
-                    Nenhum lancamento encontrado para esta transportadora.
+                    Nenhum lancamento encontrado para esta transportadora com estes filtros.
                   </div>
                 ) : (
                   <table className="min-w-full divide-y divide-white/10 text-sm">
@@ -324,7 +279,7 @@ function PackagesStatementContent() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/10">
-                      {filteredOperations.map((op) => (
+                      {operations.map((op) => (
                         <tr key={op.id} className="hover:bg-white/5 transition-colors">
                           <td className="px-4 py-3 text-gray-200">{formatDateTime(op.date)}</td>
                           <td className="px-4 py-3">

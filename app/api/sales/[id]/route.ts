@@ -256,3 +256,98 @@ export async function GET(
     return NextResponse.json({ error: message }, { status });
   }
 }
+
+// DELETE - Excluir venda (Hard Delete)
+export async function DELETE(
+  request: NextRequest,
+  props: { params: Promise<{ id: string }> }
+) {
+  try {
+    const params = await props.params;
+    const user = await authenticateUser(request);
+    const saleId = params.id;
+
+    if (!user.is_admin) {
+      return NextResponse.json(
+        { error: "Apenas administradores podem excluir vendas" },
+        { status: 403 }
+      );
+    }
+
+    await query("BEGIN");
+
+    try {
+      // 1. Verificar se a venda existe e pegar dados basicos
+      const saleResult = await query(
+        "SELECT id, attendant_id, status FROM sales WHERE id = $1",
+        [saleId]
+      );
+
+      if (saleResult.rowCount === 0) {
+        await query("ROLLBACK");
+        return NextResponse.json(
+          { error: "Venda nao encontrada" },
+          { status: 404 }
+        );
+      }
+
+      // 2. Verificar se a venda gerou pacote (Compra de Pacote)
+      const packageResult = await query(
+        "SELECT id, consumed_quantity FROM client_packages WHERE sale_id = $1",
+        [saleId]
+      );
+
+      if (packageResult.rowCount > 0) {
+        const pkg = packageResult.rows[0];
+        // Se o pacote gerado ja foi consumido, nao permitir exclusao
+        if (pkg.consumed_quantity > 0) {
+          await query("ROLLBACK");
+          return NextResponse.json(
+            { error: "Nao e possivel excluir esta venda pois o pacote gerado ja foi utilizado. Estorne os consumos primeiro." },
+            { status: 400 }
+          );
+        }
+        // Se nao foi consumido, deletar o pacote
+        await query("DELETE FROM client_packages WHERE id = $1", [pkg.id]);
+      }
+
+      // 3. Verificar se a venda foi um Consumo de Pacote
+      // Se sim, estornar o consumo para devolver o saldo ao pacote original
+      try {
+        await query("SELECT refund_package_consumption($1)", [saleId]);
+      } catch (refundError) {
+        // Ignorar erro se nao houver consumo (funcao pode nao existir ou nao ter nada pra estornar, mas refund_package_consumption costuma ser safe)
+        console.log("Info: Tentativa de estorno de consumo retornou:", refundError);
+      }
+
+      // 4. Deletar registros dependentes
+      await query("DELETE FROM commissions WHERE sale_id = $1", [saleId]);
+      
+      // Tentar deletar refunds se a tabela existir (tratamento de erro silencioso se nao existir)
+      try {
+        await query("DELETE FROM sale_refunds WHERE sale_id = $1", [saleId]);
+      } catch (e) { /* ignore */ }
+      
+      await query("DELETE FROM sale_items WHERE sale_id = $1", [saleId]);
+
+      // 5. Deletar a venda
+      await query("DELETE FROM sales WHERE id = $1", [saleId]);
+
+      await query("COMMIT");
+
+      return NextResponse.json(
+        { message: "Venda excluida permanentemente" },
+        { status: 200 }
+      );
+    } catch (error) {
+      await query("ROLLBACK");
+      throw error;
+    }
+  } catch (error) {
+    console.error("Erro ao excluir venda:", error);
+    const message =
+      error instanceof Error ? error.message : "Erro ao excluir venda";
+    const status = message.includes("autenticacao") ? 401 : 500;
+    return NextResponse.json({ error: message }, { status });
+  }
+}

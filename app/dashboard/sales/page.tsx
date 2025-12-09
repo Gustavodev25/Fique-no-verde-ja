@@ -20,6 +20,7 @@ type SaleItem = {
   subtotal: number;
   discountAmount: number;
   total: number;
+  saleType?: "01" | "02" | "03";
 };
 
 type ClientPackage = {
@@ -35,6 +36,7 @@ type ClientPackage = {
 type Sale = {
   id: string;
   clientName: string;
+  clientType?: "common" | "package";
   attendantName: string;
   attendantId: string;
   saleDate: string;
@@ -50,6 +52,7 @@ type Sale = {
   items: SaleItem[];
   createdAt: string;
   updatedAt: string;
+  saleType?: "01" | "02" | "03";
 };
 
 type Client = {
@@ -125,6 +128,7 @@ export default function SalesPage() {
   const [viewingSale, setViewingSale] = useState<Sale | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<Sale | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Sale | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Sale | null>(null);
   const [refundTarget, setRefundTarget] = useState<Sale | null>(null);
   const [refundAmount, setRefundAmount] = useState("");
   const [refundReason, setRefundReason] = useState("");
@@ -179,17 +183,24 @@ export default function SalesPage() {
     }
     if (saleTypeFilter) {
       result = result.filter((sale) => {
-        // Identificar tipo de venda pelo cliente
-        const client = clients.find((c) => c.name === sale.clientName);
-        if (!client) return true; // Se não encontrar, mostrar
+        // Tenta identificar o tipo de cliente (vem da venda ou busca na lista)
+        const clientType = sale.clientType || clients.find((c) => c.name === sale.clientName)?.clientType;
 
         if (saleTypeFilter === "package") {
-          // Venda de pacote: cliente é transportadora
-          return client.clientType === "package";
-        } else {
-          // Venda comum: cliente não é transportadora
-          return client.clientType === "common";
+          // Inclui:
+          // 1. Tipos explicitos de pacote (02 - Venda, 03 - Consumo)
+          // 2. Tipo 01 (padrao) MAS cliente eh transportadora (Legado/Migracao)
+          return (sale.saleType === "02" || sale.saleType === "03") || 
+                 (sale.saleType === "01" && clientType === "package");
+        } 
+        
+        if (saleTypeFilter === "common") {
+          // Inclui apenas Tipo 01 (Comum) E que nao seja de transportadora
+          // (Se for transportadora com tipo 01, cai na regra de pacote acima)
+          return sale.saleType === "01" && clientType !== "package";
         }
+
+        return true;
       });
     }
 
@@ -205,7 +216,6 @@ export default function SalesPage() {
       if (sortField === "client") {
         return a.clientName.localeCompare(b.clientName) * (sortDirection === "asc" ? 1 : -1);
       }
-      // total
       return (a.total - b.total) * (sortDirection === "asc" ? 1 : -1);
     });
     return sorted;
@@ -287,7 +297,6 @@ export default function SalesPage() {
           data.clients.map((c: any) => ({
             id: c.id,
             name: c.name,
-            // API retorna client_type em snake_case; garante valor padrao
             clientType:
               c.client_type === "package" || c.clientType === "package"
                 ? "package"
@@ -507,7 +516,6 @@ export default function SalesPage() {
 
   const clientOptions = useMemo(() => commonClients, [commonClients]);
 
-// Filtrar pacotes da transportadora selecionada (para tipo 03)
   const availablePackages = useMemo(() => {
     if (formData.saleType !== "03" || !formData.carrierId) return [];
 
@@ -515,19 +523,9 @@ export default function SalesPage() {
       return pkg.clientId === formData.carrierId && pkg.availableQuantity > 0;
     });
 
-    console.log("DEBUG - Pacotes disponíveis:", {
-      carrierId: formData.carrierId,
-      totalPackages: clientPackages.length,
-      carrierPackages: clientPackages.filter(p => p.clientId === formData.carrierId).length,
-      availablePackages: filtered.length,
-      allPackages: clientPackages,
-      filtered
-    });
-
     return filtered;
   }, [clientPackages, formData.saleType, formData.carrierId]);
 
-  // Pacote selecionado para consumo
   const selectedPackage = useMemo(() => {
     if (formData.saleType !== "03" || !formData.packageId) return null;
     return clientPackages.find((p) => p.id === formData.packageId);
@@ -540,7 +538,6 @@ export default function SalesPage() {
         .filter((r) => r.saleType === saleType)
         .sort((a, b) => a.minQuantity - b.minQuantity);
 
-      // Se não encontrou ranges para o tipo selecionado, usa tipo "01" como fallback
       if (applicableRanges.length === 0) {
         applicableRanges = ranges
           .filter((r) => r.saleType === "01")
@@ -551,61 +548,27 @@ export default function SalesPage() {
         return 0;
       }
 
-      // Para "Reclamação", usar cálculo progressivo (como IR)
       const normalizedName = serviceName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const isReclamacao = normalizedName.includes("reclamacao");
 
-      console.log("DEBUG calculateProgressivePrice:", {
-        serviceName,
-        normalizedName,
-        isReclamacao,
-        qty,
-        saleType: formData.saleType,
-        rangesCount: applicableRanges.length
-      });
-
       if (isReclamacao) {
-        // Buscar a faixa de 1-10 unidades
         const firstRange = applicableRanges.find(r => r.minQuantity === 1 || r.minQuantity <= 10);
-        // Buscar a faixa de 11+ unidades
         const secondRange = applicableRanges.find(r => r.minQuantity >= 11);
 
         const firstRangePrice = firstRange?.unitPrice || 40;
         const secondRangePrice = secondRange?.unitPrice || 15;
 
-        console.log("DEBUG Reclamacao calculation:", {
-          firstRange,
-          secondRange,
-          firstRangePrice,
-          secondRangePrice,
-          qty
-        });
-
-        // Fórmula progressiva:
-        // Primeiros 10: qty × firstRangePrice
-        // A partir do 11º: (qty - 10) × secondRangePrice + (10 × firstRangePrice)
         if (qty <= 10) {
-          const result = qty * firstRangePrice;
-          console.log("Result (<=10):", result);
-          return result;
+          return qty * firstRangePrice;
         } else {
-          const result = (qty - 10) * secondRangePrice + (10 * firstRangePrice);
-          console.log("Result (>10):", result);
-          return result;
+          return (qty - 10) * secondRangePrice + (10 * firstRangePrice);
         }
       } else {
-        // Para outros serviços (como "Atraso"), usar a faixa correspondente
         const range = applicableRanges.find(
           (r) =>
             qty >= r.minQuantity &&
             (r.maxQuantity === null || qty <= r.maxQuantity)
         );
-
-        console.log("DEBUG Other service calculation:", {
-          range,
-          qty,
-          result: range ? qty * range.unitPrice : 0
-        });
 
         return range ? qty * range.unitPrice : 0;
       }
@@ -627,14 +590,10 @@ export default function SalesPage() {
   }, [formData.saleType, formData.quantity, selectedPackage, selectedService, calculateProgressivePrice]);
 
   const calculateTotal = useMemo(() => {
-    // Tipo 03 - Consumo de Pacote: usa preço do pacote (SEM desconto)
     if (formData.saleType === "03" && selectedPackage) {
-      // Apenas preço unitário do pacote x quantidade
-      // NÃO aplica desconto pois já foi pago antecipadamente
       return selectedPackage.unitPrice * formData.quantity;
     }
 
-    // Tipo 01 e 02 - Comum e Venda de Pacote: cálculo normal COM desconto
     if (!selectedService) return 0;
 
     const subtotal = calculateProgressivePrice(
@@ -643,7 +602,6 @@ export default function SalesPage() {
       selectedService.priceRanges
     );
 
-    // Aplicar desconto (apenas para tipo 01 e 02)
     let discount = 0;
     if (formData.discountType === "percentage") {
       discount = subtotal * (formData.discountValue / 100);
@@ -657,7 +615,6 @@ export default function SalesPage() {
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    // Validacoes especificas por tipo
     if (formData.saleType === "03") {
       if (!formData.carrierId) {
         error("Selecione a transportadora (cliente de pacote).");
@@ -667,23 +624,19 @@ export default function SalesPage() {
         error("Selecione o cliente final.");
         return;
       }
-      // Tipo 03 - Consumo de Pacote
       if (!formData.packageId) {
         error("Selecione um pacote para consumir");
         return;
       }
-
       if (!selectedPackage) {
         error("Pacote nao encontrado");
         return;
       }
-
       if (formData.quantity > selectedPackage.availableQuantity) {
         error(`Quantidade solicitada (${formData.quantity}) excede o saldo disponivel (${selectedPackage.availableQuantity})`);
         return;
       }
     } else {
-      // Tipo 01 e 02 - Comum e Venda de Pacote
       if (formData.saleType === "02" && !formData.carrierId) {
         error("Selecione a transportadora (cliente de pacote).");
         return;
@@ -692,7 +645,6 @@ export default function SalesPage() {
         error("Selecione um serviço");
         return;
       }
-
       if (!selectedService) {
         error("Serviço não encontrado");
         return;
@@ -717,19 +669,16 @@ export default function SalesPage() {
       let productName = "";
 
       if (formData.saleType === "03") {
-        // Tipo 03 - Consumo de Pacote
         calculatedUnitPrice = selectedPackage!.unitPrice;
         calculatedSubtotal = selectedPackage!.unitPrice * formData.quantity;
         productName = selectedPackage!.serviceName;
       } else {
-        // Tipo 01 e 02 - Comum e Venda de Pacote
         const quantity = formData.quantity;
         const saleType = formData.saleType;
         let relevantRanges = selectedService!.priceRanges
           .filter((range) => range.saleType === saleType)
           .sort((a, b) => a.minQuantity - b.minQuantity);
 
-        // Se não encontrou ranges para o tipo selecionado, usa tipo "01" como fallback
         if (relevantRanges.length === 0) {
           relevantRanges = selectedService!.priceRanges
             .filter((range) => range.saleType === "01")
@@ -739,7 +688,6 @@ export default function SalesPage() {
         calculatedUnitPrice = selectedService!.basePrice;
 
         if (relevantRanges.length > 0) {
-          // Usar o preço da primeira faixa aplicável
           const applicableRange = relevantRanges.find(
             (range) =>
               quantity >= range.minQuantity &&
@@ -748,14 +696,12 @@ export default function SalesPage() {
           if (applicableRange) {
             calculatedUnitPrice = applicableRange.unitPrice;
           } else {
-            // Se não encontrou, usar o preço da última faixa
             calculatedUnitPrice = relevantRanges[relevantRanges.length - 1].unitPrice;
           }
         }
 
-        // Garantir que o preço seja maior que zero
         if (calculatedUnitPrice <= 0) {
-          calculatedUnitPrice = 1; // Valor padrão mínimo
+          calculatedUnitPrice = 1;
         }
 
         calculatedSubtotal = calculateProgressivePrice(
@@ -766,12 +712,6 @@ export default function SalesPage() {
 
         productName = selectedService!.name;
       }
-
-      console.log("DEBUG MODAL - Valores sendo enviados:");
-      console.log("Tipo de Venda:", formData.saleType);
-      console.log("Quantidade:", formData.quantity);
-      console.log("Subtotal calculado:", calculatedSubtotal);
-      console.log("Unit Price:", calculatedUnitPrice);
 
       const payload: any = {
         clientId:
@@ -792,15 +732,12 @@ export default function SalesPage() {
             quantity: formData.quantity,
             unitPrice: calculatedUnitPrice,
             calculatedSubtotal: calculatedSubtotal,
-            // Tipo 03 (Consumo de Pacote): SEM desconto
-            // Tipo 01 e 02: COM desconto
             discountType: formData.saleType === "03" ? "percentage" : formData.discountType,
             discountValue: formData.saleType === "03" ? 0 : formData.discountValue,
           },
         ],
       };
 
-      // Adicionar dados específicos do tipo 03
       if (formData.saleType === "03") {
         payload.packageId = formData.packageId;
         payload.serviceId = selectedPackage!.serviceId;
@@ -809,8 +746,6 @@ export default function SalesPage() {
         payload.serviceId = formData.serviceId;
         payload.carrierId = formData.carrierId;
       }
-
-      console.log("DEBUG MODAL - Payload:", JSON.stringify(payload, null, 2));
 
       const response = await fetch("/api/sales", {
         method: "POST",
@@ -912,6 +847,41 @@ export default function SalesPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+
+    const token = localStorage.getItem("token");
+    if (!token) {
+      error("Sessao expirada. Faca login novamente.");
+      return;
+    }
+
+    setProcessing(true);
+    try {
+      const response = await fetch(`/api/sales/${deleteTarget.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao excluir venda");
+      }
+
+      success("Venda excluida permanentemente!");
+      setDeleteTarget(null);
+      await fetchSales();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Erro ao excluir venda";
+      error(message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const handleRefund = async () => {
     if (!refundTarget) return;
 
@@ -983,17 +953,22 @@ export default function SalesPage() {
   };
 
   const getSaleTypeLabel = (sale: Sale): { type: string; label: string; color: string } => {
-    const client = clients.find((c) => c.name === sale.clientName);
-
-    if (!client) {
+    if (sale.saleType) {
+      if (sale.saleType === "02") {
+        return { type: "02", label: "VENDA DE PACOTE", color: "bg-purple-500/20 text-purple-300 border-purple-500/40" };
+      }
+      if (sale.saleType === "03") {
+        return { type: "03", label: "CONSUMO PACOTE", color: "bg-orange-500/20 text-orange-300 border-orange-500/40" };
+      }
       return { type: "01", label: "COMUM", color: "bg-blue-500/20 text-blue-300 border-blue-500/40" };
     }
 
-    if (client.clientType === "package") {
+    const clientType = sale.clientType || clients.find((c) => c.name === sale.clientName)?.clientType;
+
+    if (clientType === "package") {
       return { type: "02", label: "VENDA DE PACOTE", color: "bg-purple-500/20 text-purple-300 border-purple-500/40" };
     }
 
-    // TODO: Identificar tipo 03 (Consumo de Pacote) quando tivermos essa informação no banco
     return { type: "01", label: "COMUM", color: "bg-blue-500/20 text-blue-300 border-blue-500/40" };
   };
 
@@ -1256,6 +1231,22 @@ export default function SalesPage() {
                       >
                         Ver detalhes
                       </Button>
+                      
+                      {isAdmin && (
+                         <Button
+                            size="sm"
+                            variant="ghost"
+                            className="rounded-full px-2 py-1 text-gray-500 hover:bg-red-500/10 hover:text-red-400"
+                            title="Excluir permanentemente"
+                            onClick={() => setDeleteTarget(sale)}
+                         >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                               <polyline points="3 6 5 6 21 6"></polyline>
+                               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                         </Button>
+                      )}
+
                       {sale.status === "aberta" && (
                         <>
                           <Button
@@ -1305,7 +1296,7 @@ export default function SalesPage() {
           </div>
         )}
 
-        {/* Paginação */}
+        {/* ... (Pagination) */}
         {!loading && sortedSales.length > ITEMS_PER_PAGE && (
           <div className="px-6 py-4 border-t border-white/10 flex flex-col sm:flex-row gap-4 items-center justify-between">
             <p className="text-sm text-gray-400">
@@ -1375,7 +1366,6 @@ export default function SalesPage() {
         }
       >
         <form id="sale-form" className="space-y-4" onSubmit={handleSubmit}>
-          {/* Tipo de Venda - primeiro campo para adaptar o formulário */}
           <div>
             <label className="block text-xs uppercase text-gray-400 mb-2">
               Tipo de Venda
@@ -1393,7 +1383,6 @@ export default function SalesPage() {
             </select>
           </div>
 
-          {/* Cliente comum (apenas tipo 01) */}
           {formData.saleType === "01" && (
             <div>
               <label className="block text-xs uppercase text-gray-400 mb-2">
@@ -1420,7 +1409,6 @@ export default function SalesPage() {
             </div>
           )}
 
-          {/* Transportadora (cliente de pacote) para venda/consumo de creditos */}
           {(formData.saleType === "02" || formData.saleType === "03") && (
             <div>
               <label className="block text-xs uppercase text-gray-400 mb-2">
@@ -1450,7 +1438,6 @@ export default function SalesPage() {
             </div>
           )}
 
-          {/* Campo Serviço - apenas para tipo 01 e 02 */}
           {formData.saleType !== "03" && (
             <div>
               <label className="block text-xs uppercase text-gray-400 mb-2">
@@ -1477,10 +1464,8 @@ export default function SalesPage() {
             </div>
           )}
 
-          {/* Campos condicionais para Consumo de Pacote (Tipo 03) */}
           {formData.saleType === "03" && (
             <>
-              {/* Cliente (apenas clientes com pacotes) */}
               <div>
                 <label className="block text-xs uppercase text-gray-400 mb-2">
                   Cliente final
@@ -1505,7 +1490,6 @@ export default function SalesPage() {
                 </select>
               </div>
 
-              {/* Pacote (aparece após selecionar cliente) */}
               {formData.carrierId && (
                 <div>
                   <label className="block text-xs uppercase text-gray-400 mb-2">
@@ -1534,7 +1518,6 @@ export default function SalesPage() {
                     )}
                   </select>
 
-                  {/* Info do Pacote Selecionado */}
                   {selectedPackage && (
                     <div className="mt-3 p-4 rounded-xl bg-white/5 border border-white/10">
                       <div className="flex items-center justify-between mb-3">
@@ -1547,7 +1530,6 @@ export default function SalesPage() {
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
-                        {/* Saldo ANTES */}
                         <div className="bg-white/5 rounded-lg p-3 border border-white/10">
                           <p className="text-xs text-gray-400 mb-1">Saldo Atual</p>
                           <p className="text-2xl font-bold text-white">
@@ -1556,7 +1538,6 @@ export default function SalesPage() {
                           <p className="text-xs text-gray-500">unidades disponíveis</p>
                         </div>
 
-                        {/* Saldo DEPOIS */}
                         <div className="bg-white/5 rounded-lg p-3 border border-white/10">
                           <p className="text-xs text-gray-400 mb-1">Após Consumo</p>
                           <p className="text-2xl font-bold text-white">
@@ -1566,7 +1547,6 @@ export default function SalesPage() {
                         </div>
                       </div>
 
-                      {/* Alerta se quantidade for maior que saldo */}
                       {formData.quantity > selectedPackage.availableQuantity && (
                         <div className="mt-3 p-2 rounded-lg bg-red-500/20 border border-red-500/40">
                           <p className="text-xs text-red-300">
@@ -1575,7 +1555,6 @@ export default function SalesPage() {
                         </div>
                       )}
 
-                      {/* Info de quanto vai consumir */}
                       {formData.quantity > 0 && formData.quantity <= selectedPackage.availableQuantity && (
                         <div className="mt-3 p-2 rounded-lg bg-white/10 border border-white/20">
                           <p className="text-xs text-gray-300">
@@ -1605,7 +1584,6 @@ export default function SalesPage() {
             />
           </div>
 
-          {/* Campo Desconto - apenas para tipo 01 e 02 (não para consumo de pacote) */}
           {formData.saleType !== "03" && (
             <div>
               <label className="block text-xs uppercase text-gray-400 mb-2">
@@ -1635,7 +1613,6 @@ export default function SalesPage() {
             </div>
           )}
 
-          {/* Campo Forma de Pagamento - apenas para tipo 01 e 02 (não para consumo de pacote) */}
           {formData.saleType !== "03" && (
             <div>
               <label className="block text-xs uppercase text-gray-400 mb-2">
@@ -1699,7 +1676,6 @@ export default function SalesPage() {
         </form>
       </Modal>
 
-      {/* Modal Ver Detalhes */}
       <Modal
         open={Boolean(viewingSale)}
         onClose={() => setViewingSale(null)}
@@ -1809,7 +1785,6 @@ export default function SalesPage() {
         )}
       </Modal>
 
-      {/* Modal Confirmar Venda */}
       <Modal
         open={Boolean(confirmTarget)}
         onClose={() => setConfirmTarget(null)}
@@ -1844,7 +1819,6 @@ export default function SalesPage() {
         )}
       </Modal>
 
-      {/* Modal Cancelar Venda */}
       <Modal
         open={Boolean(cancelTarget)}
         onClose={() => setCancelTarget(null)}
@@ -1883,7 +1857,44 @@ export default function SalesPage() {
         )}
       </Modal>
 
-      {/* Modal Estornar Venda */}
+      <Modal
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        title="Excluir venda permanentemente"
+        footer={
+          <div className="flex items-center justify-end gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-xl px-5"
+              onClick={() => setDeleteTarget(null)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              className="rounded-xl px-6 bg-red-600 border border-red-700 hover:bg-red-700 text-white"
+              disabled={processing}
+              onClick={handleDelete}
+            >
+              {processing ? "Excluindo..." : "Confirmar Exclusão"}
+            </Button>
+          </div>
+        }
+      >
+        {deleteTarget && (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-300">
+              ATENÇÃO: Você está prestes a excluir permanentemente a venda para{" "}
+              <span className="font-semibold text-white">{deleteTarget.clientName}</span>.
+            </p>
+            <p className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 p-3 rounded-lg">
+              Esta ação é irreversível e removerá todo o histórico financeiro, comissões e itens relacionados a esta venda.
+            </p>
+          </div>
+        )}
+      </Modal>
+
       <Modal
         open={Boolean(refundTarget)}
         onClose={closeRefundModal}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/Button";
 import { Select } from "@/components/Select";
@@ -44,13 +45,15 @@ const formatDateTime = (value: string) => {
   })}`;
 };
 
-export default function PackagesStatementPage() {
+function PackagesStatementContent() {
+  const searchParams = useSearchParams();
   const { error } = useToast();
   const [operations, setOperations] = useState<Operation[]>([]);
   const [summary, setSummary] = useState<Summary[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [clientId, setClientId] = useState("");
+  // Inicializa com o parametro da URL, se existir
+  const [clientId, setClientId] = useState(searchParams.get("clientId") || "");
   const [typeFilter, setTypeFilter] = useState<"" | "compra" | "consumo">("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -97,6 +100,7 @@ export default function PackagesStatementPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
+      // Usa o state atual de clientId
       if (clientId) params.set("clientId", clientId);
       if (typeFilter) params.set("type", typeFilter);
       if (startDate) params.set("startDate", startDate);
@@ -120,10 +124,11 @@ export default function PackagesStatementPage() {
     }
   };
 
+  // Auto-fetch quando filtros chave mudam
   useEffect(() => {
     fetchStatement();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [clientId, typeFilter]); // Removemos attendantId para evitar fetch excessivo, mas poderiamos incluir
 
   useEffect(() => {
     fetchAttendants();
@@ -216,7 +221,8 @@ export default function PackagesStatementPage() {
                   setStartDate("");
                   setEndDate("");
                   setAttendantId("");
-                  fetchStatement();
+                  // Forcar reload para limpar
+                  setTimeout(() => document.getElementById("btn-reload")?.click(), 100);
                 }}
               >
                 Limpar
@@ -315,5 +321,13 @@ export default function PackagesStatementPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PackagesStatementPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-white">Carregando...</div>}>
+      <PackagesStatementContent />
+    </Suspense>
   );
 }

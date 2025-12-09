@@ -155,6 +155,7 @@ export async function GET(request: NextRequest) {
           s.updated_at,
           s.commission_amount,
           c.name as client_name,
+          c.client_type,
           u.first_name || ' ' || u.last_name as attendant_name
          FROM sales s
          JOIN clients c ON s.client_id = c.id
@@ -187,6 +188,7 @@ export async function GET(request: NextRequest) {
             s.updated_at,
             s.commission_amount,
             c.name as client_name,
+            c.client_type,
             u.first_name || ' ' || u.last_name as attendant_name
            FROM sales s
            JOIN clients c ON s.client_id = c.id
@@ -223,7 +225,8 @@ export async function GET(request: NextRequest) {
 
             discount_amount,
 
-            total
+            total,
+            sale_type
 
            FROM sale_items
 
@@ -264,6 +267,7 @@ export async function GET(request: NextRequest) {
           id: sale.id,
           clientId: sale.client_id,
           clientName: sale.client_name,
+          clientType: sale.client_type,
           attendantId: sale.attendant_id,
 
           attendantName: sale.attendant_name,
@@ -273,6 +277,8 @@ export async function GET(request: NextRequest) {
           observations: sale.observations,
 
           status: sale.status,
+          
+          saleType: items.rows.length > 0 ? items.rows[0].sale_type : "01",
 
           paymentMethod: sale.payment_method,
 
@@ -309,6 +315,7 @@ export async function GET(request: NextRequest) {
             subtotal: parseFloat(item.subtotal),
             discountAmount: parseFloat(item.discount_amount),
             total: parseFloat(item.total),
+            saleType: item.sale_type,
           })),
           refunds: hasRefundSupport
             ? refunds.map((ref: any) => ({
