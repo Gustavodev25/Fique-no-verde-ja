@@ -104,11 +104,13 @@ export async function GET(request: NextRequest) {
             name
           )
         ),
-        sale_items (
+        sale_items!inner (
           product_name,
-          quantity
+          quantity,
+          sale_type
         )
       `)
+      .in("sale_items.sale_type", ["01", "03"])
       .order("reference_date", { ascending: false })
       .order("created_at", { ascending: false });
 
@@ -173,6 +175,7 @@ export async function GET(request: NextRequest) {
         clientName: clientData?.name || "N/A",
         productName: saleItemData?.product_name || "N/A",
         itemQuantity: saleItemData?.quantity !== undefined ? Number(saleItemData.quantity) : null,
+        saleType: saleItemData?.sale_type || "01",
       };
     });
 

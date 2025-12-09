@@ -24,6 +24,7 @@ type Commission = {
   clientName: string;
   productName: string;
   itemQuantity: number | null;
+  saleType?: "01" | "02" | "03";
 };
 
 const formatCurrency = (value: number) =>
@@ -290,6 +291,7 @@ export default function CommissionsPage() {
               <tr className="text-left text-gray-300">
                 <th className="px-6 py-3">Data Ref.</th>
                 <th className="px-6 py-3">Venda</th>
+                <th className="px-6 py-3">Tipo</th>
                 <th className="px-6 py-3">Servico/Produto</th>
                 <th className="px-6 py-3 text-right">Qtde</th>
                 <th className="px-6 py-3 text-right">Bruto</th>
@@ -315,6 +317,15 @@ export default function CommissionsPage() {
                         {comm.saleNumber ? `#${comm.saleNumber}` : `${comm.saleId.slice(0, 8)}...`}
                       </a>
                       <p className="text-xs text-gray-400">{comm.clientName}</p>
+                    </td>
+                    <td className="px-6 py-3">
+                      <span className={`text-xs px-2 py-1 rounded border font-medium ${
+                        comm.saleType === "03"
+                          ? "bg-orange-500/20 text-orange-300 border-orange-500/40"
+                          : "bg-blue-500/20 text-blue-300 border-blue-500/40"
+                      }`}>
+                        {comm.saleType === "03" ? "CONSUMO" : "COMUM"}
+                      </span>
                     </td>
                     <td className="px-6 py-3 text-gray-300">
                       <div className="flex flex-col">
@@ -349,7 +360,7 @@ export default function CommissionsPage() {
               </tbody>
               <tfoot className="bg-white/10 font-bold">
                 <tr>
-                  <td colSpan={8} className="px-6 py-4 text-right text-white uppercase tracking-wider">
+                  <td colSpan={9} className="px-6 py-4 text-right text-white uppercase tracking-wider">
                     Total Geral (Filtrado)
                   </td>
                   <td className="px-6 py-4 text-right text-emerald-300 text-lg">
