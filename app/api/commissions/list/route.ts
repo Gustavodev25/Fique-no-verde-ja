@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { query } from "@/lib/db";
+import { query, supabaseAdmin } from "@/lib/db";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this";
 
@@ -55,137 +55,135 @@ const authenticateUser = async (request: NextRequest): Promise<AuthenticatedUser
 export async function GET(request: NextRequest) {
   try {
     const user = await authenticateUser(request);
+    console.log("[COMMISSIONS LIST] User authenticated:", {
+      userId: user.id,
+      isAdmin: user.is_admin
+    });
+
     const { searchParams } = new URL(request.url);
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
     const attendantFilter = searchParams.get("attendantId");
-    const status = searchParams.get("status");
+    const statusFilter = searchParams.get("status");
     const dayType = searchParams.get("dayType");
 
-    let sql = `
-      SELECT
-        c.id,
-        c.reference_date,
-        c.commission_amount,
-        c.status,
-        c.created_at,
-        c.user_id as attendant_id,
-        u.first_name,
-        u.last_name,
-        s.id as sale_id,
-        s.sale_number,
-        s.subtotal,
-        s.total_discount,
-        s.total,
-        s.refund_total,
-        CASE
-          WHEN EXTRACT(DOW FROM c.reference_date) IN (0,6)
-            OR EXISTS (
-              SELECT 1 FROM holidays h
-              WHERE h.date = c.reference_date::date
-              AND h.is_active = true
-            )
-          THEN 'non_working'
-          ELSE 'weekday'
-        END as day_type,
-        cl.name as client_name,
-        si.product_name,
-        si.quantity as item_quantity
-      FROM commissions c
-      JOIN users u ON c.user_id = u.id
-      JOIN sales s ON c.sale_id = s.id
-      JOIN clients cl ON s.client_id = cl.id
-      LEFT JOIN sale_items si ON c.sale_item_id = si.id
-      WHERE 1=1
-    `;
+    console.log("[COMMISSIONS LIST] Query params:", {
+      startDate,
+      endDate,
+      attendantFilter,
+      statusFilter,
+      dayType
+    });
 
-    const params: any[] = [];
-    let paramCount = 0;
+    // Usar Supabase para buscar comissões com relacionamentos
+    let queryBuilder = supabaseAdmin
+      .from("commissions")
+      .select(`
+        id,
+        reference_date,
+        commission_amount,
+        status,
+        created_at,
+        user_id,
+        sale_id,
+        sale_item_id,
+        users!inner (
+          id,
+          first_name,
+          last_name
+        ),
+        sales!inner (
+          id,
+          sale_number,
+          subtotal,
+          total_discount,
+          total,
+          refund_total,
+          client_id,
+          clients!inner (
+            name
+          )
+        ),
+        sale_items (
+          product_name,
+          quantity
+        )
+      `)
+      .order("reference_date", { ascending: false })
+      .order("created_at", { ascending: false });
 
+    // Aplicar filtros
     if (!user.is_admin) {
-      paramCount++;
-      sql += ` AND c.user_id = $${paramCount}`;
-      params.push(user.id);
+      queryBuilder = queryBuilder.eq("user_id", user.id);
     } else if (attendantFilter) {
-      paramCount++;
-      sql += ` AND c.user_id = $${paramCount}`;
-      params.push(attendantFilter);
+      queryBuilder = queryBuilder.eq("user_id", attendantFilter);
     }
+
     if (startDate) {
-      paramCount++;
-      sql += ` AND c.reference_date >= $${paramCount}`;
-      params.push(startDate);
+      queryBuilder = queryBuilder.gte("reference_date", startDate);
     }
+
     if (endDate) {
-      paramCount++;
-      sql += ` AND c.reference_date <= $${paramCount}`;
-      params.push(endDate);
-    }
-    if (status) {
-      paramCount++;
-      sql += ` AND c.status = $${paramCount}`;
-      params.push(status);
-    }
-    if (dayType === "weekday" || dayType === "non_working") {
-      paramCount++;
-      sql += ` AND (
-        CASE
-          WHEN EXTRACT(DOW FROM c.reference_date) IN (0,6)
-            OR EXISTS (
-              SELECT 1 FROM holidays h
-              WHERE h.date = c.reference_date::date
-              AND h.is_active = true
-            )
-          THEN 'non_working'
-          ELSE 'weekday'
-        END
-      ) = $${paramCount}`;
-      params.push(dayType);
+      queryBuilder = queryBuilder.lte("reference_date", endDate);
     }
 
-    sql += ` ORDER BY c.reference_date DESC, c.created_at DESC`;
-
-    let result;
-    try {
-      result = await query(sql, params);
-    } catch (err: any) {
-      const msg = err?.message || "";
-      // Fallback se o schema ainda nao tiver sale_number / refund_total
-      if (msg.includes("sale_number") || msg.includes("refund_total")) {
-        result = await query(
-          sql.replace("s.sale_number,", "NULL as sale_number,").replace("s.refund_total,", "0 as refund_total,"),
-          params,
-        );
-      } else {
-        throw err;
-      }
+    if (statusFilter) {
+      queryBuilder = queryBuilder.eq("status", statusFilter);
     }
 
-    const commissions = result.rows.map((row: any) => ({
-      id: row.id,
-      referenceDate: row.reference_date,
-      amount: Number(row.commission_amount),
-      status: row.status,
-      createdAt: row.created_at,
-      attendantId: row.attendant_id,
-      attendantName: `${row.first_name} ${row.last_name}`.trim(),
-      saleId: row.sale_id,
-      saleNumber: row.sale_number ?? null,
-      saleSubtotal: row.subtotal !== undefined ? Number(row.subtotal) : null,
-      saleDiscount: row.total_discount !== undefined ? Number(row.total_discount) : null,
-      saleTotal: row.total !== undefined ? Number(row.total) : null,
-      refundTotal: row.refund_total !== undefined ? Number(row.refund_total) : null,
-      saleNetTotal:
-        row.total !== undefined
-          ? Number(row.total) - Number(row.refund_total ?? 0)
-          : null,
-      dayType: row.day_type || "weekday",
-      clientName: row.client_name,
-      productName: row.product_name || "N/A",
-      itemQuantity: row.item_quantity !== undefined ? Number(row.item_quantity) : null,
-    }));
+    const { data: commissionsData, error: commissionsError } = await queryBuilder;
 
-    return NextResponse.json({ commissions });
+    if (commissionsError) {
+      console.error("[COMMISSIONS LIST] Supabase error:", commissionsError);
+      throw new Error("Erro ao buscar comissoes: " + commissionsError.message);
+    }
+
+    console.log("[COMMISSIONS LIST] Commissions fetched:", commissionsData?.length || 0);
+
+    // Processar dados e calcular day_type
+    const commissions = (commissionsData || []).map((row: any) => {
+      const refDate = new Date(row.reference_date);
+      const dayOfWeek = refDate.getDay();
+      const isDayType = dayOfWeek === 0 || dayOfWeek === 6 ? "non_working" : "weekday";
+
+      const userData = Array.isArray(row.users) ? row.users[0] : row.users;
+      const saleData = Array.isArray(row.sales) ? row.sales[0] : row.sales;
+      const clientData = saleData?.clients ? (Array.isArray(saleData.clients) ? saleData.clients[0] : saleData.clients) : null;
+      const saleItemData = row.sale_items ? (Array.isArray(row.sale_items) ? row.sale_items[0] : row.sale_items) : null;
+
+      return {
+        id: row.id,
+        referenceDate: row.reference_date,
+        amount: Number(row.commission_amount),
+        status: row.status,
+        createdAt: row.created_at,
+        attendantId: row.user_id,
+        attendantName: userData ? `${userData.first_name} ${userData.last_name}`.trim() : "N/A",
+        saleId: row.sale_id,
+        saleNumber: saleData?.sale_number ?? null,
+        saleSubtotal: saleData?.subtotal !== undefined ? Number(saleData.subtotal) : null,
+        saleDiscount: saleData?.total_discount !== undefined ? Number(saleData.total_discount) : null,
+        saleTotal: saleData?.total !== undefined ? Number(saleData.total) : null,
+        refundTotal: saleData?.refund_total !== undefined ? Number(saleData.refund_total) : null,
+        saleNetTotal:
+          saleData?.total !== undefined
+            ? Number(saleData.total) - Number(saleData.refund_total ?? 0)
+            : null,
+        dayType: isDayType,
+        clientName: clientData?.name || "N/A",
+        productName: saleItemData?.product_name || "N/A",
+        itemQuantity: saleItemData?.quantity !== undefined ? Number(saleItemData.quantity) : null,
+      };
+    });
+
+    // Filtrar por dayType se especificado (não é possível filtrar diretamente no SQL)
+    const filteredCommissions = dayType
+      ? commissions.filter(c => c.dayType === dayType)
+      : commissions;
+
+    console.log("[COMMISSIONS LIST] Returning commissions:", filteredCommissions.length);
+
+    return NextResponse.json({ commissions: filteredCommissions });
   } catch (error) {
     console.error("Erro ao listar comissoes:", error);
     const message = error instanceof Error ? error.message : "Erro ao listar comissoes";

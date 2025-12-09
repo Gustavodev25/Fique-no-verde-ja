@@ -30,7 +30,12 @@
       "Bash(ls:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(node test-commissions.js:*)",
+      "Bash(node check-sales-status.js:*)",
+      "Bash(node debug-database.js:*)",
+      "Bash(node generate-missing-commissions.js:*)",
+      "Bash(node:*)"
     ],
     "deny": [],
     "ask": []

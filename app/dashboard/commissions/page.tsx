@@ -102,15 +102,23 @@ export default function CommissionsPage() {
       const params = new URLSearchParams();
       if (isAdmin && attendantId) params.set("attendantId", attendantId);
       if (dayType) params.set("dayType", dayType);
-      const res = await fetch(`/api/commissions/list?${params.toString()}`, {
+      const url = `/api/commissions/list?${params.toString()}`;
+      console.log("[COMMISSIONS PAGE] Fetching:", url);
+      console.log("[COMMISSIONS PAGE] Filters:", { isAdmin, attendantId, dayType });
+
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
+      console.log("[COMMISSIONS PAGE] Response:", { ok: res.ok, status: res.status, data });
+
       if (!res.ok) {
         throw new Error(data.error || "Nao foi possivel carregar comissoes");
       }
+      console.log("[COMMISSIONS PAGE] Commissions received:", data.commissions?.length || 0);
       setCommissions(data.commissions || []);
     } catch (err) {
+      console.error("[COMMISSIONS PAGE] Error:", err);
       const msg = err instanceof Error ? err.message : "Erro ao carregar comissoes";
       error(msg);
     } finally {

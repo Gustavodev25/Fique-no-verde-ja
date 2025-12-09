@@ -598,9 +598,11 @@ export async function POST(request: NextRequest) {
 
             discount_amount,
 
-            total
+            total,
 
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            sale_type
+
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             saleId,
             normalizedProductId,
@@ -616,6 +618,8 @@ export async function POST(request: NextRequest) {
             discountAmount,
 
             itemTotal,
+
+            normalizedSaleType
 
           ]
 
@@ -1061,6 +1065,8 @@ export async function PUT(request: NextRequest) {
 
           discountValue,
 
+          saleType,
+
         } = item;
 
 
@@ -1119,9 +1125,11 @@ export async function PUT(request: NextRequest) {
 
             discount_amount,
 
-            total
+            total,
 
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            sale_type
+
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 
           [
 
@@ -1144,6 +1152,8 @@ export async function PUT(request: NextRequest) {
             discountAmount,
 
             itemTotal,
+
+            saleType || "01"
 
           ]
 
