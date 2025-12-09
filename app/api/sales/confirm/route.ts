@@ -136,11 +136,11 @@ export async function POST(request: NextRequest) {
         const itemQuantity = parseInt(item.quantity || 1);
 
         // Buscar política aplicável para o sale_type do item
-        let policy = policies.find(p => p.sale_type === itemSaleType && p.scope === 'general');
+        let policy = policies.find((p: any) => p.sale_type === itemSaleType && p.scope === 'general');
 
         // Se não encontrar política específica, usar a política geral
         if (!policy) {
-          policy = policies.find(p => (p.sale_type === 'all' || !p.sale_type) && p.scope === 'general');
+          policy = policies.find((p: any) => (p.sale_type === 'all' || !p.sale_type) && p.scope === 'general');
         }
 
         if (!policy) {
