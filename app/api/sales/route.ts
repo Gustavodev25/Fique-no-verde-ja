@@ -378,7 +378,15 @@ export async function POST(request: NextRequest) {
 
     const normalizedSaleType: "01" | "02" | "03" = saleType || "01";
 
-    // ValidaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes
+    console.log("[SALES POST] Request body:", {
+      saleType: normalizedSaleType,
+      clientId,
+      carrierId,
+      packageId,
+      serviceId,
+    });
+
+    // ValidaÃƒÆ'Ã‚Â§ÃƒÆ'Ã‚Âµes
     if (normalizedSaleType === "01" && !clientId) {
       return NextResponse.json(
         { error: "Cliente e obrigatorio" },
@@ -444,6 +452,12 @@ export async function POST(request: NextRequest) {
 
     const clientType = clientTypeResult.rows[0].client_type || "common";
 
+    console.log("[SALES POST] Client validation:", {
+      saleClientId,
+      clientType,
+      normalizedSaleType,
+    });
+
     if (normalizedSaleType === "01" && clientType === "package") {
       return NextResponse.json(
         { error: "Clientes de pacote nao podem realizar venda comum" },
@@ -451,15 +465,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (normalizedSaleType === "02" || normalizedSaleType === "03") {
+    // Para vendas tipo 02 e 03, saleClientId já é o carrierId (tipo 02) ou verificamos se o cliente final existe
+    if (normalizedSaleType === "02") {
+      // Para tipo 02, o saleClientId é o carrierId, já validado acima
+      if (clientType !== "package") {
+        return NextResponse.json(
+          { error: "Apenas clientes de pacote (transportadora) podem comprar pacotes" },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (normalizedSaleType === "03") {
+      // Para tipo 03, precisamos validar tanto o cliente final quanto a transportadora
+      // O saleClientId é o clientId (cliente final), já validado acima
+
+      // Validar se o carrierId foi enviado
+      if (!carrierId) {
+        console.error("[SALES POST] CarrierId is missing for type 03");
+        return NextResponse.json(
+          { error: "Transportadora e obrigatoria para consumo de pacote" },
+          { status: 400 }
+        );
+      }
+
+      // Validar a transportadora separadamente
+      console.log("[SALES POST] Validating carrier for type 03:", { carrierId, type: typeof carrierId });
+
       const carrierTypeResult = await query(
-        "SELECT client_type FROM clients WHERE id = $1",
+        "SELECT id, name, client_type FROM clients WHERE id = $1",
         [carrierId]
       );
 
+      console.log("[SALES POST] Carrier query result:", {
+        rowCount: carrierTypeResult.rowCount,
+        rows: carrierTypeResult.rows,
+      });
+
       if (carrierTypeResult.rowCount === 0) {
         return NextResponse.json(
-          { error: "Transportadora nao encontrada" },
+          { error: `Transportadora nao encontrada (ID: ${carrierId})` },
           { status: 404 }
         );
       }
@@ -467,10 +512,12 @@ export async function POST(request: NextRequest) {
       const carrierType = carrierTypeResult.rows[0].client_type || "common";
       if (carrierType !== "package") {
         return NextResponse.json(
-          { error: "Apenas clientes de pacote (transportadora) podem comprar ou consumir pacotes" },
+          { error: `Cliente ${carrierTypeResult.rows[0].name} nao e uma transportadora (tipo: ${carrierType})` },
           { status: 400 }
         );
       }
+
+      console.log("[SALES POST] Carrier validated:", carrierTypeResult.rows[0].name);
     }
 
 
